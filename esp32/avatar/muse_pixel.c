@@ -895,6 +895,9 @@ void muse_pixel_render(const muse_pose_t *p)
     float happy = p->happy;
     float level = p->level;
     float t = p->t;
+    /* Entry poses also read clearly as held e-paper keyframes. */
+    float listen = clampf(p->mode_t / 0.9f, 0, 1);
+    listen = listen * listen * (3.0f - 2.0f * listen);
 
     update_palette(&SCHEMES[mode], dt);
     float blink = eyes_update(p, dt);
@@ -906,6 +909,7 @@ void muse_pixel_render(const muse_pose_t *p)
     switch (mode) {
     case MUSE_MODE_LISTENING:
         bob = sinf(t * 3.0f) * 0.6f;
+        lean = 1.8f * listen;
         break;
     case MUSE_MODE_THINKING:
         bob = sinf(t * 2.4f) * 0.8f;
@@ -930,6 +934,12 @@ void muse_pixel_render(const muse_pose_t *p)
     float boot = mode == MUSE_MODE_BOOT ? clampf(p->mode_t / 1.4f, 0, 1) : 1.0f;
     float pop = mode == MUSE_MODE_BOOT ? clampf(p->mode_t / 0.6f, 0, 1) : 1.0f;
     float squash = 1.0f - (1.0f - pop) * 0.35f + sinf(pop * 3.1416f) * 0.06f;
+    if (mode == MUSE_MODE_BOOT) {
+        /* Wake, stretch into a small hop, then settle into a greeting. */
+        float stretch = sinf(clampf((p->mode_t - 0.6f) / 0.9f, 0, 1) * 3.1416f);
+        hop += 2.5f * stretch;
+        squash += 0.04f * stretch;
+    }
 
     float breathe = sinf(t * breathe_rate + 1.0f) * 0.03f;
     avatar_t j;
@@ -969,10 +979,19 @@ void muse_pixel_render(const muse_pose_t *p)
     float adx = j.a + 0.3f;
     float ay = j.cy + 4.0f;
     switch (mode) {
+    case MUSE_MODE_BOOT: {
+        float greet = clampf((p->mode_t - 0.7f) / 0.6f, 0, 1);
+        arms[0] = (limb_t){ j.cx - adx, ay, -0.3f };
+        arms[1] = (limb_t){ j.cx + adx, ay - 10.0f * greet,
+                           0.3f - 2.6f * greet };
+        break;
+    }
     case MUSE_MODE_LISTENING:
-        /* Hands raised beside the face, like cupping an ear. */
-        arms[0] = (limb_t){ j.cx - adx + 1.0f, j.fy + 5.0f, 0.55f };
-        arms[1] = (limb_t){ j.cx + adx - 1.0f, j.fy + 5.0f, -0.55f };
+        /* Raise one hand toward the ear while leaning in to listen. */
+        arms[0] = (limb_t){ j.cx - adx, ay, -0.3f };
+        arms[1] = (limb_t){ j.cx + adx - listen,
+                           ay + (j.fy + 3.0f - ay) * listen,
+                           0.3f - 0.85f * listen };
         break;
     case MUSE_MODE_THINKING:
         /* One paw up to the chin. */
@@ -1021,6 +1040,7 @@ void muse_pixel_render(const muse_pose_t *p)
         break;
     case MUSE_MODE_LISTENING:
         style = EYES_WIDE;
+        open = 1.0f; // avoid freezing a blink on a held listening keyframe
         mouth = MOUTH_O;
         break;
     case MUSE_MODE_THINKING:

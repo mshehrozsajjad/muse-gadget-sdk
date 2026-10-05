@@ -45,6 +45,7 @@
 #include "battery_154.h"
 #include "climate_154.h"
 #include "epaper_154_icons.h"
+#include "epaper_154_animation.h"
 #include "epaper_pixels.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -60,6 +61,7 @@
 #include "pixel_font.h"
 #include "sdkconfig.h"
 #include "stack_monitor.h"
+#include "wifi_mgr.h"
 
 static const char *TAG = "link.led";
 
@@ -67,6 +69,9 @@ static const char *TAG = "link.led";
 
 #define BOARD_PIN_VBAT_HOLD 17  // high keeps the battery switched on
 #define BOARD_PIN_EPD_POWER 6   // low powers the panel
+// Low powers the audio circuit, and the SHTC3 with it: the sensor doesn't
+// answer until this is on (voice_board_waveshare_epaper_154.c drives it too).
+#define BOARD_PIN_AUDIO_POWER 42
 
 #define EPD_HOST        SPI2_HOST
 #define EPD_PIN_SCLK    12
@@ -92,7 +97,7 @@ static const char *TAG = "link.led";
 // connecting costs one refresh. A voice change waits much less: "Listening"
 // has to show while the button is still held.
 #define STATUS_SETTLE_MS 1500
-#define VOICE_SETTLE_MS  100
+#define VOICE_SETTLE_MS  30
 // Fast refreshes leave a faint ghost of the old picture; every so often the
 // status gets a full refresh, which flashes but clears it.
 #define FULL_REFRESH_EVERY 10
@@ -146,15 +151,18 @@ static const reply_layout_t s_layout_compact = {
 // The card gives way to the status screen this long after the turn ends.
 #define REPLY_SHOW_MS    60000
 
-// Switch the battery hold and the panel on, and keep both through light sleep.
+// Switch the battery hold, the panel and the audio rail (for the sensor) on,
+// and keep the first two through light sleep.
 static void board_power_on(void) {
     const gpio_config_t out = {
-        .pin_bit_mask = 1ULL << BOARD_PIN_VBAT_HOLD | 1ULL << BOARD_PIN_EPD_POWER,
+        .pin_bit_mask = 1ULL << BOARD_PIN_VBAT_HOLD | 1ULL << BOARD_PIN_EPD_POWER
+                        | 1ULL << BOARD_PIN_AUDIO_POWER,
         .mode = GPIO_MODE_OUTPUT,
     };
     gpio_config(&out);
     gpio_set_level(BOARD_PIN_VBAT_HOLD, 1);
     gpio_set_level(BOARD_PIN_EPD_POWER, 0);
+    gpio_set_level(BOARD_PIN_AUDIO_POWER, 0);
     gpio_hold_en(BOARD_PIN_VBAT_HOLD);
     gpio_hold_en(BOARD_PIN_EPD_POWER);
 }
@@ -226,6 +234,7 @@ static int s_fast_refreshes = FULL_REFRESH_EVERY;  // the first is full
 static SemaphoreHandle_t s_lock;
 static bool s_image_mode;    // an image replaces the status screen
 static bool s_image_dirty;   // drawn since the last refresh
+static bool s_animation_hidden; // cancel even if an image is shown and cleared between frames
 static bool s_status_drawn;  // the status screen shows s_drawn_*
 static const char *s_drawn_label;
 static char s_drawn_title[48];
@@ -249,6 +258,7 @@ static SemaphoreHandle_t s_mutex;
 static led_state_t s_state = LED_STATE_BOOT;
 static led_voice_t s_voice = LED_VOICE_IDLE;
 static bool s_voice_changed;  // settle quickly: the change is a voice one
+static uint32_t s_pose_generation; // captures rapid leave/re-enter during a panel refresh
 static char s_reply[REPLY_MAX];  // the reply card's page, "" for none
 static bool s_reply_more;        // the reply goes on past the page
 static bool s_reply_compact;     // laid out with s_layout_compact
@@ -581,13 +591,13 @@ static muse_mode_t character_mode(led_state_t state) {
 
 // The character in `mode`, still, in gray, with its black background as
 // paper. The renderer eases its colours from one mode to the next over
-// time, so a few frames are rendered first to settle on the mode's own.
-static void draw_character(muse_mode_t mode) {
+// time, so a few frames settle the palette while holding the chosen key pose.
+static void draw_character(muse_mode_t mode, float mode_t) {
     static uint16_t row[CHARACTER_SIZE];
     muse_pose_t pose = {.mode = mode};
     for (int i = 0; i < 10; i++) {
         pose.t += 0.2f;
-        pose.mode_t += 0.2f;
+        pose.mode_t = mode_t;
         muse_pixel_render(&pose);
     }
     for (int y = 0; y < CHARACTER_SIZE; y++) {
@@ -607,6 +617,9 @@ static int wifi_bars_at(int rssi) {
 // Wi-Fi signal bars now, 0 when not connected. `previous` stands while the
 // RSSI is within the margin of its range.
 static int wifi_bars(int previous) {
+    // Boot now draws before wifi_mgr_init(). The RSSI API does not guard
+    // against an uninitialized Wi-Fi task in ESP-IDF 6.0.1.
+    if (!wifi_mgr_is_connected()) return 0;
     int rssi;
     if (esp_wifi_sta_get_rssi(&rssi) != ESP_OK) return 0;
     int low = wifi_bars_at(rssi - WIFI_MARGIN_DB), high = wifi_bars_at(rssi + WIFI_MARGIN_DB);
@@ -689,19 +702,38 @@ static void epd_task(void *arg) {
     int wifi = 0, battery = -1;
     climate_t climate = {0};
     int64_t card_until = 0;  // when the reply card goes, 0 while it stays
+    epaper_animation_t animation = {0};
+#if CONFIG_HOMEHUB_EPAPER_154_ANIMATIONS
+    const bool animate = true;
+    const int hold_ms = CONFIG_HOMEHUB_EPAPER_154_ANIMATION_HOLD_MS;
+#else
+    const bool animate = false;
+    const int hold_ms = 0;
+#endif
     for (;;) {
         // A status change, time to check the icons, or the card's time is up.
-        int wait_ms = ICON_POLL_MS;
+        int wait_ms = animation.initialized ? ICON_POLL_MS : 0;
+        if (animation.next_ms) {
+            int64_t left_ms = animation.next_ms - esp_timer_get_time() / 1000;
+            if (left_ms < wait_ms) wait_ms = left_ms < 0 ? 0 : (int)left_ms;
+        }
         if (card_until) {
             int64_t left_ms = (card_until - esp_timer_get_time()) / 1000;
             wait_ms = left_ms < 0 ? 0 : left_ms < wait_ms ? (int)left_ms : wait_ms;
         }
-        if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wait_ms))) {
+        if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wait_ms)) && animation.initialized) {
             xSemaphoreTake(s_mutex, portMAX_DELAY);
-            int settle_ms = s_voice_changed ? VOICE_SETTLE_MS : STATUS_SETTLE_MS;
+            int settle_ms = animation.next_ms ? 0 :
+                            s_voice_changed ? VOICE_SETTLE_MS : STATUS_SETTLE_MS;
             s_voice_changed = false;
             xSemaphoreGive(s_mutex);
             while (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(settle_ms))) {
+                // A voice event arriving during connection debounce must not
+                // wait out another 1.5-second connection window.
+                xSemaphoreTake(s_mutex, portMAX_DELAY);
+                if (s_voice_changed && settle_ms) settle_ms = VOICE_SETTLE_MS;
+                s_voice_changed = false;
+                xSemaphoreGive(s_mutex);
             }
         }
         wifi = wifi_bars(wifi);
@@ -724,13 +756,31 @@ static void epd_task(void *arg) {
         bool reply_compact = s_reply_compact;
         const char *label = voice_label(s_voice);
         muse_mode_t mode = label ? voice_mode(s_voice) : character_mode(s_state);
+        uint32_t generation = s_pose_generation;
+        bool boot_allowed = s_voice == LED_VOICE_IDLE && s_state != LED_STATE_ERROR &&
+                            s_state != LED_STATE_UNPAIRED &&
+                            s_state != LED_STATE_PAIRING_CONFIRM_REQUIRED && !reply[0];
         if (!label) label = status_label(s_state);
         memcpy(title, s_title, sizeof(title));
         xSemaphoreGive(s_mutex);
 
         xSemaphoreTake(s_panel_lock, portMAX_DELAY);
         xSemaphoreTake(s_lock, portMAX_DELAY);
-        bool redraw = !s_image_mode && (!s_status_drawn || label != s_drawn_label
+        bool holding_boot = epaper_animation_keep_boot(&animation, animate,
+                            boot_allowed && !s_image_mode && !s_animation_hidden,
+                            esp_timer_get_time() / 1000);
+        if (holding_boot) {
+            mode = MUSE_MODE_BOOT;
+            label = status_label(LED_STATE_BOOT);
+            if (animation.initialized) generation = animation.generation;
+        }
+        if (s_animation_hidden) {
+            epaper_animation_prepare(&animation, generation, mode, false, animate, 0);
+            s_animation_hidden = false;
+        }
+        bool frame_due = epaper_animation_prepare(&animation, generation, mode,
+                         !s_image_mode && !reply[0], animate, esp_timer_get_time() / 1000);
+        bool redraw = !s_image_mode && (frame_due || !s_status_drawn || label != s_drawn_label
                                         || strcmp(title, s_drawn_title) != 0
                                         || mode != s_drawn_mode || wifi != s_drawn_wifi
                                         || battery != s_drawn_battery
@@ -750,7 +800,7 @@ static void epd_task(void *arg) {
 #endif
             {
                 draw_title(title, TITLE_Y, TITLE_MAX_SCALE);
-                draw_character(mode);
+                draw_character(mode, epaper_animation_pose_time(&animation));
                 draw_status(label, STATUS_Y, STATUS_SCALE);
             }
             epd_dither();
@@ -767,10 +817,27 @@ static void epd_task(void *arg) {
             s_drawn_reply_compact = reply_compact;
         }
         xSemaphoreGive(s_lock);
-        if (redraw && epd_update(full) != ESP_OK) {
+        // Recheck after rendering: never start a refresh for a superseded
+        // action. A refresh already in flight cannot be cancelled by this panel.
+        xSemaphoreTake(s_mutex, portMAX_DELAY);
+        bool superseded = holding_boot ?
+            (s_voice != LED_VOICE_IDLE || s_state == LED_STATE_ERROR ||
+             s_state == LED_STATE_UNPAIRED || s_state == LED_STATE_PAIRING_CONFIRM_REQUIRED ||
+             s_reply[0]) : generation != s_pose_generation;
+        xSemaphoreGive(s_mutex);
+        if (redraw && superseded) {
             xSemaphoreTake(s_lock, portMAX_DELAY);
             s_status_drawn = false;
             xSemaphoreGive(s_lock);
+            xTaskNotifyGive(s_task);
+        } else if (redraw) {
+            bool success = epd_update(full) == ESP_OK;
+            epaper_animation_presented(&animation, esp_timer_get_time() / 1000, success, hold_ms);
+            if (!success) {
+                xSemaphoreTake(s_lock, portMAX_DELAY);
+                s_status_drawn = false;
+                xSemaphoreGive(s_lock);
+            }
         }
         xSemaphoreGive(s_panel_lock);
         stack_monitor_poll(&stack);
@@ -849,6 +916,7 @@ void led_status_set_state(led_state_t state) {
     if (!s_ready) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     bool changed = s_state != state;
+    if (changed && s_voice == LED_VOICE_IDLE) s_pose_generation++;
     s_state = state;
     xSemaphoreGive(s_mutex);
     if (changed) xTaskNotifyGive(s_task);
@@ -882,6 +950,7 @@ bool led_status_draw_rect(int x, int y, int w, int h, const uint16_t *pixels) {
     xSemaphoreTake(s_lock, portMAX_DELAY);
     if (!s_image_mode) {
         s_image_mode = true;
+        s_animation_hidden = true;
         s_status_drawn = false;
         memset(s_canvas, 255, CANVAS_BYTES);
     }
@@ -926,7 +995,10 @@ void led_status_set_voice(led_voice_t voice) {
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     bool changed = s_voice != voice;  // the voice task repeats states
     s_voice = voice;
-    if (changed) s_voice_changed = true;
+    if (changed) {
+        s_voice_changed = true;
+        s_pose_generation++;
+    }
     if (voice == LED_VOICE_LISTENING) s_reply[0] = '\0';  // a new turn: the card goes
     xSemaphoreGive(s_mutex);
     if (changed) xTaskNotifyGive(s_task);
@@ -946,7 +1018,10 @@ void led_status_show_reply(const char *page, bool more, bool compact) {
     snprintf(s_reply, sizeof(s_reply), "%s", page);
     s_reply_more = more;
     s_reply_compact = compact;
-    if (changed) s_voice_changed = true;
+    if (changed) {
+        s_voice_changed = true;
+        s_pose_generation++;
+    }
     xSemaphoreGive(s_mutex);
     if (changed) xTaskNotifyGive(s_task);
 }

@@ -222,6 +222,25 @@ menu "ESP32 Device SDK"
             bool "No status LED"
     endchoice
 
+    config HOMEHUB_EPAPER_154_ANIMATIONS
+        bool "Play short boot and listening animations"
+        depends on HOMEHUB_LED_BACKEND_WAVESHARE_EPAPER_154
+        default y
+        help
+            Show three procedural poses once on boot or entry to listening.
+            Boot completes through routine connection updates. Voice actions,
+            errors, reply cards and images cancel the remaining boot poses.
+            Disable to keep the original still-pose display behavior.
+
+    config HOMEHUB_EPAPER_154_ANIMATION_HOLD_MS
+        int "Pause after each animation refresh (ms)"
+        depends on HOMEHUB_EPAPER_154_ANIMATIONS
+        range 40 2000
+        default 100
+        help
+            Minimum hold after the panel finishes refreshing, not a frame
+            rate. Tune on the device using the logged fast-refresh duration.
+
     config HOMEHUB_LED_RGB_ORDER
         bool "Addressable LED takes red first (RGB order)"
         depends on HOMEHUB_LED_BACKEND_DEVKIT_GPIO27
