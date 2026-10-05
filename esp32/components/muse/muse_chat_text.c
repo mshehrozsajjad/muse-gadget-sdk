@@ -183,6 +183,44 @@ bool muse_hatch_caption_at(const char *text, size_t at, char *out, size_t cap)
     return true;
 }
 
+size_t muse_hatch_plain_text(char *s)
+{
+    char *out = s;
+    bool line_start = true;
+    for (char *p = s; *p;) {
+        if (line_start && *p == '#') {
+            while (*p == '#') {
+                p++;
+            }
+            while (*p == ' ') {
+                p++;
+            }
+            line_start = false;
+            continue;
+        }
+        if (*p == '[') {
+            char *close = strpbrk(p + 1, "]\n");
+            char *end = close && *close == ']' && close[1] == '(' ? strpbrk(close + 2, ")\n") : NULL;
+            if (end && *end == ')') {
+                size_t n = (size_t)(close - p - 1);
+                memmove(out, p + 1, n);   /* out never passes p */
+                out += n;
+                p = end + 1;
+                line_start = false;
+                continue;
+            }
+        }
+        if (*p == '*' || *p == '`') {
+            p++;
+            continue;
+        }
+        line_start = *p == '\n';
+        *out++ = *p++;
+    }
+    *out = '\0';
+    return (size_t)(out - s);
+}
+
 /* ---- Typed turns on the serial console ---- */
 
 /* JSON-escapes whole characters of *src into out, up to cap - 1 bytes; moves *src past them. */

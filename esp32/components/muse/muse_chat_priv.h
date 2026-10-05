@@ -84,6 +84,10 @@ size_t muse_hatch_base64(const uint8_t *in, size_t n, char *out);
  * of wrapped lines holding byte `at` of `text` (false if there's no text). */
 void muse_hatch_tail_words(const char *src, char *out, size_t cap);
 bool muse_hatch_caption_at(const char *text, size_t at, char *out, size_t cap);
+/* Markdown to plain text in place, for captions and speech: a link
+ * [text](url) keeps its text; emphasis and code marks (* `) and heading marks
+ * (# at a line's start) go. Returns the new length. */
+size_t muse_hatch_plain_text(char *s);
 
 #ifdef __cplusplus
 }

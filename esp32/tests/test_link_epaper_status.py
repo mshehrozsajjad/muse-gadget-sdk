@@ -80,7 +80,8 @@ class LinkEpaperStatusTest(unittest.TestCase):
         # Both implementations provide the whole display interface.
         header = (ROOT / "main/led_status.h").read_text()
         for name in re.findall(r"^\w[\w ]*?\b(led_status_\w+)\(", header, re.M):
-            if name in ("led_status_set_voice", "led_status_set_level", "led_status_show_volume"):
+            if name in ("led_status_set_voice", "led_status_set_level", "led_status_show_volume",
+                        "led_status_reply_page", "led_status_show_reply"):
                 continue
             for impl in ("led_status.c", "epaper_status.c", "epaper_154_status.c"):
                 self.assertRegex((ROOT / "main" / impl).read_text(), rf"\n\w[\w ]*\b{name}\(",

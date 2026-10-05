@@ -1390,6 +1390,10 @@ static void message_done(int i, const char *final_text)
     if (!m.len && final_text && final_text[0]) {
         append_text(m, final_text);
     }
+    if (m.len && s_turn.texts) {
+        /* Shown and spoken as plain text: a link's text, not its Markdown. */
+        m.len = muse_hatch_plain_text(s_turn.texts + i * TEXT_MAX);
+    }
     if (m.len && m.tts == TTS_NONE) {
         m.tts = TTS_QUEUED;
     }

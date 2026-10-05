@@ -28,6 +28,7 @@
 
 #include "app.h"
 #include "config_store.h"
+#include "led_status.h"
 #include "wifi_mgr.h"
 
 #include "muse_link.h"
@@ -91,9 +92,17 @@ bool muse_settings_speaker_on(void) {
     return true;
 }
 
-// No screen either, so reply text is never shown; Muse's default page.
+static atomic_bool s_reply_compact;
+
+void voice_reply_compact(bool compact) {
+    atomic_store(&s_reply_compact, compact);
+}
+
+// The reply card's page, on boards that have one; otherwise reply text is
+// never shown, and Muse's default page.
 void muse_state_page(bool cjk, int *cols, int *lines) {
     (void)cjk;
+    if (led_status_reply_page(atomic_load(&s_reply_compact), cols, lines)) return;
     *cols = 16;
     *lines = 2;
 }

@@ -52,6 +52,9 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "muse_pixel.h"
+#if CONFIG_HOMEHUB_VOICE
+#include "muse_text.h"
+#endif
 #include "pixel_font.h"
 #include "sdkconfig.h"
 #include "stack_monitor.h"
@@ -110,6 +113,34 @@ static const char *TAG = "link.led";
 #define STATUS_Y         162
 #define STATUS_SCALE     2
 #define STATUS_LINE_GAP  4
+
+// Reply card: the status bar, then the reply's opening page, left-aligned:
+// in the status text's size (2x) when the reply fits, or compact (1.5x) to
+// fit nearly twice as much when it doesn't.
+#define REPLY_X          4
+#define REPLY_Y          20
+#define REPLY_MAX        512
+
+typedef struct {
+    int halves;  // font pixel size in half pixels
+    int cols, lines;
+    int line_h;  // in pixels
+} reply_layout_t;
+
+static const reply_layout_t s_layout_normal = {
+    .halves = STATUS_SCALE * 2,
+    .cols = 16,  // 12 px a character
+    .lines = 9,
+    .line_h = PIXEL_FONT_HEIGHT * STATUS_SCALE + STATUS_LINE_GAP,  // 20 px
+};
+static const reply_layout_t s_layout_compact = {
+    .halves = 3,
+    .cols = 21,  // 9 px a character
+    .lines = 12,
+    .line_h = PIXEL_FONT_HEIGHT * 3 / 2 + 3,  // 15 px
+};
+// The card gives way to the status screen this long after the turn ends.
+#define REPLY_SHOW_MS    60000
 
 // Switch the battery hold and the panel on, and keep both through light sleep.
 static void board_power_on(void) {
@@ -196,6 +227,8 @@ static const char *s_drawn_label;
 static char s_drawn_title[48];
 static int s_drawn_wifi, s_drawn_battery;
 static muse_mode_t s_drawn_mode;
+static char s_drawn_reply[REPLY_MAX];
+static bool s_drawn_reply_more, s_drawn_reply_compact;
 
 // Requested by led_status_set_state(), _set_title() and _set_voice();
 // guarded by s_mutex. While a voice turn runs, its state stands in for the
@@ -204,6 +237,9 @@ static SemaphoreHandle_t s_mutex;
 static led_state_t s_state = LED_STATE_BOOT;
 static led_voice_t s_voice = LED_VOICE_IDLE;
 static bool s_voice_changed;  // settle quickly: the change is a voice one
+static char s_reply[REPLY_MAX];  // the reply card's page, "" for none
+static bool s_reply_more;        // the reply goes on past the page
+static bool s_reply_compact;     // laid out with s_layout_compact
 static char s_title[48];
 static TaskHandle_t s_task;
 
@@ -377,30 +413,42 @@ static const char *status_label(led_state_t state) {
     return "";
 }
 
-// Draw the first `n` bytes of `text` in black at pixel size `scale`, centred
-// on the row at `y`. Bytes outside printable ASCII show as '?'.
-static void draw_run(const char *text, int n, int y, int scale) {
+// Draw the first `n` bytes of `text` in black, each font pixel `halves` / 2
+// screen pixels wide (4 for 2x, 3 for 1.5x, where font pixels alternate
+// between 2 and 1), from (x0, y). Bytes outside printable ASCII show as '?'.
+static void draw_run_halves(const char *text, int n, int x0, int y, int halves) {
     const int adv = PIXEL_FONT_WIDTH + 1;
-    int x0 = (EPD_W - (n * adv * scale - scale)) / 2;
     for (int i = 0; i < n; i++) {
         unsigned char ch = (unsigned char)text[i];
         if (ch < PIXEL_FONT_FIRST || ch > PIXEL_FONT_LAST) ch = '?';
         const uint8_t *glyph = pixel_font[ch - PIXEL_FONT_FIRST];
         for (int gx = 0; gx < PIXEL_FONT_WIDTH; gx++) {
+            int col = i * adv + gx;
+            int px = x0 + col * halves / 2, pw = x0 + (col + 1) * halves / 2 - px;
             for (int gy = 0; gy < PIXEL_FONT_HEIGHT; gy++) {
                 if (!(glyph[gx] >> gy & 1)) continue;
-                int px = x0 + (i * adv + gx) * scale, py = y + gy * scale;
-                for (int r = 0; r < scale; r++) {
-                    memset(s_canvas + (size_t)(py + r) * EPD_W + px, 0, scale);
+                int py = y + gy * halves / 2, ph = y + (gy + 1) * halves / 2 - py;
+                for (int r = 0; r < ph; r++) {
+                    memset(s_canvas + (size_t)(py + r) * EPD_W + px, 0, pw);
                 }
             }
         }
     }
 }
 
+// As draw_run_halves, at a whole pixel size `scale`.
+static void draw_run(const char *text, int n, int x0, int y, int scale) {
+    draw_run_halves(text, n, x0, y, scale * 2);
+}
+
 // The most characters of the font at `scale` that fit across the screen.
 static int chars_per_line(int scale) {
     return (EPD_W + scale) / ((PIXEL_FONT_WIDTH + 1) * scale);
+}
+
+// Where a run of `n` characters at `scale` starts to sit centred.
+static int centred_x(int n, int scale) {
+    return (EPD_W - (n * (PIXEL_FONT_WIDTH + 1) * scale - scale)) / 2;
 }
 
 // Draw `text` centred on the row at `y`, in the largest pixel size up to
@@ -411,7 +459,7 @@ static void draw_title(const char *text, int y, int max_scale) {
     while (scale > 2 && n > chars_per_line(scale)) scale--;
     if (n > chars_per_line(scale)) n = chars_per_line(scale);
     y += (max_scale - scale) * PIXEL_FONT_HEIGHT / 2;
-    draw_run(text, n, y, scale);
+    draw_run(text, n, centred_x(n, scale), y, scale);
 }
 
 // Draw `text` from the row at `y` on up to two centred lines, broken at the
@@ -425,12 +473,13 @@ static void draw_status(const char *text, int y, int scale) {
         while (first > 0 && text[first] != ' ') first--;
         if (first == 0) first = max;
     }
-    draw_run(text, first, y, scale);
+    draw_run(text, first, centred_x(first, scale), y, scale);
     const char *rest = text + first;
     while (*rest == ' ') rest++;
     int left = (int)strlen(rest);
     if (left) {
-        draw_run(rest, left < max ? left : max, y + PIXEL_FONT_HEIGHT * scale + STATUS_LINE_GAP,
+        int n2 = left < max ? left : max;
+        draw_run(rest, n2, centred_x(n2, scale), y + PIXEL_FONT_HEIGHT * scale + STATUS_LINE_GAP,
                  scale);
     }
 }
@@ -458,6 +507,49 @@ static muse_mode_t voice_mode(led_voice_t voice) {
         default:                  return MUSE_MODE_THINKING;
     }
 }
+
+#if CONFIG_HOMEHUB_VOICE
+// One line of reply text in the pixel font's ASCII: the stand-ins the
+// caption wrapping counted (curly quotes straight, emoji dropped), '?' for
+// what has none. Returns the length, at most `cap` - 1.
+static int reply_line_ascii(const char *line, size_t bytes, char *out, int cap) {
+    int n = 0;
+    for (size_t i = 0; i < bytes && n < cap - 1;) {
+        size_t len = 1;
+        char shown[4];
+        int w = muse_text_ascii(line + i, &len, shown);
+        if (w < 0) {
+            out[n++] = len == 1 ? line[i] : '?';
+        } else {
+            for (int k = 0; k < w && n < cap - 1; k++) out[n++] = shown[k];
+        }
+        i += len ? len : 1;
+    }
+    out[n] = '\0';
+    return n;
+}
+
+// The reply's page, line by line, with "..." closing the last line when the
+// reply goes on.
+static void draw_reply(const char *page, bool more, const reply_layout_t *layout) {
+    const int cols = layout->cols;
+    char line[64];
+    for (int row = 0; row < layout->lines && *page; row++) {
+        const char *end = strchr(page, '\n');
+        size_t bytes = end ? (size_t)(end - page) : strlen(page);
+        int n = reply_line_ascii(page, bytes, line, sizeof(line));
+        page = end ? end + 1 : page + bytes;
+        bool last = row == layout->lines - 1 || !*page;
+        if (last && more) {
+            while (n > cols - 3 || (n && line[n - 1] == ' ')) n--;
+            memcpy(line + n, "...", 4);
+            n += 3;
+        }
+        draw_run_halves(line, n < cols ? n : cols, REPLY_X, REPLY_Y + row * layout->line_h,
+                        layout->halves);
+    }
+}
+#endif
 
 // The character's pose for a connection state.
 static muse_mode_t character_mode(led_state_t state) {
@@ -541,9 +633,15 @@ static void epd_task(void *arg) {
     (void)arg;
     stack_monitor_t stack = STACK_MONITOR_INIT;
     int wifi = 0, battery = -1;
+    int64_t card_until = 0;  // when the reply card goes, 0 while it stays
     for (;;) {
-        // A status change, or time to check the icons.
-        if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(ICON_POLL_MS))) {
+        // A status change, time to check the icons, or the card's time is up.
+        int wait_ms = ICON_POLL_MS;
+        if (card_until) {
+            int64_t left_ms = (card_until - esp_timer_get_time()) / 1000;
+            wait_ms = left_ms < 0 ? 0 : left_ms < wait_ms ? (int)left_ms : wait_ms;
+        }
+        if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wait_ms))) {
             xSemaphoreTake(s_mutex, portMAX_DELAY);
             int settle_ms = s_voice_changed ? VOICE_SETTLE_MS : STATUS_SETTLE_MS;
             s_voice_changed = false;
@@ -554,7 +652,20 @@ static void epd_task(void *arg) {
         wifi = wifi_bars(wifi);
         battery = battery_cells(battery);
         char title[sizeof(s_title)];
+        static char reply[REPLY_MAX];
         xSemaphoreTake(s_mutex, portMAX_DELAY);
+        // The card's time starts once the turn is over.
+        if (!s_reply[0] || s_voice != LED_VOICE_IDLE) {
+            card_until = 0;
+        } else if (!card_until) {
+            card_until = esp_timer_get_time() + REPLY_SHOW_MS * 1000LL;
+        } else if (esp_timer_get_time() >= card_until) {
+            s_reply[0] = '\0';
+            card_until = 0;
+        }
+        memcpy(reply, s_reply, sizeof(reply));
+        bool reply_more = s_reply_more;
+        bool reply_compact = s_reply_compact;
         const char *label = voice_label(s_voice);
         muse_mode_t mode = label ? voice_mode(s_voice) : character_mode(s_state);
         if (!label) label = status_label(s_state);
@@ -566,15 +677,25 @@ static void epd_task(void *arg) {
         bool redraw = !s_image_mode && (!s_status_drawn || label != s_drawn_label
                                         || strcmp(title, s_drawn_title) != 0
                                         || mode != s_drawn_mode || wifi != s_drawn_wifi
-                                        || battery != s_drawn_battery);
+                                        || battery != s_drawn_battery
+                                        || strcmp(reply, s_drawn_reply) != 0
+                                        || reply_more != s_drawn_reply_more
+                                        || reply_compact != s_drawn_reply_compact);
         // A new screen after an image gets a full refresh too.
         bool full = !s_status_drawn || s_fast_refreshes >= FULL_REFRESH_EVERY;
         if (redraw) {
             memset(s_canvas, 255, CANVAS_BYTES);
             draw_status_bar(wifi, battery);
-            draw_title(title, TITLE_Y, TITLE_MAX_SCALE);
-            draw_character(mode);
-            draw_status(label, STATUS_Y, STATUS_SCALE);
+#if CONFIG_HOMEHUB_VOICE
+            if (reply[0]) {
+                draw_reply(reply, reply_more, reply_compact ? &s_layout_compact : &s_layout_normal);
+            } else
+#endif
+            {
+                draw_title(title, TITLE_Y, TITLE_MAX_SCALE);
+                draw_character(mode);
+                draw_status(label, STATUS_Y, STATUS_SCALE);
+            }
             epd_dither();
             // An image drawn during the refresh clears this again.
             s_status_drawn = true;
@@ -583,6 +704,9 @@ static void epd_task(void *arg) {
             s_drawn_wifi = wifi;
             s_drawn_battery = battery;
             s_drawn_mode = mode;
+            memcpy(s_drawn_reply, reply, sizeof(s_drawn_reply));
+            s_drawn_reply_more = reply_more;
+            s_drawn_reply_compact = reply_compact;
         }
         xSemaphoreGive(s_lock);
         if (redraw && epd_update(full) != ESP_OK) {
@@ -743,6 +867,26 @@ void led_status_set_voice(led_voice_t voice) {
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     bool changed = s_voice != voice;  // the voice task repeats states
     s_voice = voice;
+    if (changed) s_voice_changed = true;
+    if (voice == LED_VOICE_LISTENING) s_reply[0] = '\0';  // a new turn: the card goes
+    xSemaphoreGive(s_mutex);
+    if (changed) xTaskNotifyGive(s_task);
+}
+
+bool led_status_reply_page(bool compact, int *cols, int *lines) {
+    const reply_layout_t *layout = compact ? &s_layout_compact : &s_layout_normal;
+    *cols = layout->cols;
+    *lines = layout->lines;
+    return true;
+}
+
+void led_status_show_reply(const char *page, bool more, bool compact) {
+    if (!s_ready || !page) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool changed = strcmp(s_reply, page) != 0 || s_reply_more != more || s_reply_compact != compact;
+    snprintf(s_reply, sizeof(s_reply), "%s", page);
+    s_reply_more = more;
+    s_reply_compact = compact;
     if (changed) s_voice_changed = true;
     xSemaphoreGive(s_mutex);
     if (changed) xTaskNotifyGive(s_task);

@@ -1176,6 +1176,20 @@ void led_status_show_volume(int percent) {
     xSemaphoreGive(s_mutex);
     if (s_task) xTaskNotifyGive(s_task);
 }
+
+// No reply card on a ring or a light: replies show up in the Muse app.
+bool led_status_reply_page(bool compact, int *cols, int *lines) {
+    (void)compact;
+    (void)cols;
+    (void)lines;
+    return false;
+}
+
+void led_status_show_reply(const char *page, bool more, bool compact) {
+    (void)page;
+    (void)more;
+    (void)compact;
+}
 #endif
 
 bool led_status_display_info(int *width, int *height) {

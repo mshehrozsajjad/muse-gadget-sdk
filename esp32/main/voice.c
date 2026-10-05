@@ -18,8 +18,10 @@
 
 #include <math.h>
 #include <stdatomic.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -54,6 +56,7 @@ static const char *TAG = "link.voice";
 // Keep listening briefly after release so the last word is not clipped.
 #define RELEASE_TAIL_MS     250
 #define REPLY_CHUNK         (VOICE_PLAYER_RATE / 50)   // 20 ms
+#define REPLY_PAGE_CHECK_MS 500
 
 typedef enum { EVT_PRESS, EVT_RELEASE } voice_evt_t;
 
@@ -165,6 +168,28 @@ static bool fail(const char *why) {
     return false;
 }
 
+// Wraps the reply to the card's normal or compact page; true if it goes on
+// past the page, that is if the page at its very end is another one.
+static bool reply_page(bool compact, char *page, size_t cap) {
+    static char last[512];
+    voice_reply_compact(compact);
+    page[0] = '\0';
+    if (!muse_hatch_turn_caption(0, page, cap)) return false;
+    return muse_hatch_turn_caption(SIZE_MAX, last, sizeof(last)) && strcmp(page, last) != 0;
+}
+
+// Put the reply's opening page on the screen, on boards with a reply card:
+// in the normal size if it fits, otherwise in the compact one.
+static void show_reply(void) {
+    static char page[512];
+    bool more = reply_page(false, page, sizeof(page));
+    if (!page[0]) return;
+    bool compact = more;
+    if (compact) more = reply_page(true, page, sizeof(page));
+    voice_reply_compact(false);
+    led_status_show_reply(page, more, compact);
+}
+
 // Play the reply as it arrives. Returns true if a new press interrupted it.
 static bool reply(void) {
     static int16_t pcm[REPLY_CHUNK];
@@ -172,12 +197,19 @@ static bool reply(void) {
     bool done = false;
     size_t played = 0;
     int64_t t0 = esp_timer_get_time();
+    int64_t next_page = 0;
     voice_player_begin();
     for (;;) {
         if (pressed_again(0)) {
             muse_hatch_turn_cancel();
             voice_player_stop();
             return true;
+        }
+        // The page can change with no event (the reply grows past it, or its
+        // Markdown is cleaned up once it's complete), so look again now and then.
+        if (!done && esp_timer_get_time() >= next_page) {
+            show_reply();
+            next_page = esp_timer_get_time() + REPLY_PAGE_CHECK_MS * 1000LL;
         }
         muse_hatch_ev_t ev;
         while ((ev = muse_hatch_turn_event(text, sizeof(text))) != MUSE_HATCH_EV_NONE) {
@@ -188,9 +220,11 @@ static bool reply(void) {
                 break;
             case MUSE_HATCH_EV_REPLY:
                 if (!voice_player_started()) led_status_set_voice(LED_VOICE_BUFFERING);
+                show_reply();
                 break;
             case MUSE_HATCH_EV_DONE:
                 done = true;
+                show_reply();  // the whole reply is in now
                 break;
             case MUSE_HATCH_EV_ERROR:
                 voice_player_stop();

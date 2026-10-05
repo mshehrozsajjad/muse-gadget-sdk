@@ -20,6 +20,6 @@ dependencies:
   espressif/esp_codec_dev:
     version: "~1.5"
     rules:
-      - if: "$CONFIG{HOMEHUB_VOICE_ES8311} == True"
+      - if: "$CONFIG{HOMEHUB_VOICE_CODEC} == \"es8311\""
   idf:
     version: ">=5.1"

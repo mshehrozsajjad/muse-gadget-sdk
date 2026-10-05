@@ -83,3 +83,13 @@ void led_status_set_level(float level);
 // Show the speaker volume (0 to 100) on the ring for a moment, over whatever
 // it shows.
 void led_status_show_volume(int percent);
+
+// The reply card's page in characters, for backends that show a reply's text
+// (muse_hatch_turn_caption wraps to it): the normal one, or the compact one
+// for replies too long for it. False without a card.
+bool led_status_reply_page(bool compact, int *cols, int *lines);
+// Show a reply's opening page in place of the status screen until the next
+// voice turn: lines separated by '\n', `more` when the reply goes on past it,
+// and `compact` when it was wrapped to the compact page. Backends without a
+// card ignore it.
+void led_status_show_reply(const char *page, bool more, bool compact);

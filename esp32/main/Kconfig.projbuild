@@ -289,10 +289,12 @@ menu "ESP32 Device SDK"
             half a second to change).
 
     # Always defined, unlike the backend it follows, so main/idf_component.yml
-    # can ask for the codec driver with it.
-    config HOMEHUB_VOICE_ES8311
-        bool
-        default y if HOMEHUB_LED_BACKEND_WAVESHARE_EPAPER_154 && HOMEHUB_VOICE
+    # can ask for the codec driver with it: a string, since an unset hidden
+    # bool is left out of the configuration altogether.
+    config HOMEHUB_VOICE_CODEC
+        string
+        default "es8311" if HOMEHUB_LED_BACKEND_WAVESHARE_EPAPER_154 && HOMEHUB_VOICE
+        default "none"
 
     config HOMEHUB_SENSECAP_SENSORS
         bool "SenseCAP Indicator air sensors (sensors.read)"
