@@ -16,5 +16,10 @@ dependencies:
   espressif/esp_websocket_client: "~1.2"
   espressif/cjson: "~1.7"
   espressif/led_strip: "~3.0"
+  # The ES8311 on the Waveshare 1.54 inch e-paper board.
+  espressif/esp_codec_dev:
+    version: "~1.5"
+    rules:
+      - if: "$CONFIG{HOMEHUB_VOICE_ES8311} == True"
   idf:
     version: ">=5.1"

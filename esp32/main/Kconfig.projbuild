@@ -264,7 +264,8 @@ menu "ESP32 Device SDK"
 
     config HOMEHUB_VOICE
         bool "Push-to-talk voice chat"
-        depends on (HOMEHUB_LED_BACKEND_VOICE_RING || HOMEHUB_LED_BACKEND_RESPEAKER_LITE) && SPIRAM
+        depends on (HOMEHUB_LED_BACKEND_VOICE_RING || HOMEHUB_LED_BACKEND_RESPEAKER_LITE \
+                    || HOMEHUB_LED_BACKEND_WAVESHARE_EPAPER_154) && SPIRAM
         default y
         help
             Hold the centre button (XIAO BOOT on reSpeaker Lite), speak,
@@ -276,6 +277,22 @@ menu "ESP32 Device SDK"
             account. While the mute
             switch is on, the button keeps its setup role (tap to confirm
             pairing, hold to reset).
+
+    config HOMEHUB_VOICE_CUES
+        bool "Beep when recording starts and stops"
+        depends on HOMEHUB_VOICE
+        default y if HOMEHUB_LED_BACKEND_WAVESHARE_EPAPER_154
+        help
+            A short rising tone when a push-to-talk recording starts and a
+            falling one when it stops, for boards with nothing else that
+            answers the press at once (the Waveshare 1.54 inch e-paper takes
+            half a second to change).
+
+    # Always defined, unlike the backend it follows, so main/idf_component.yml
+    # can ask for the codec driver with it.
+    config HOMEHUB_VOICE_ES8311
+        bool
+        default y if HOMEHUB_LED_BACKEND_WAVESHARE_EPAPER_154 && HOMEHUB_VOICE
 
     config HOMEHUB_SENSECAP_SENSORS
         bool "SenseCAP Indicator air sensors (sensors.read)"

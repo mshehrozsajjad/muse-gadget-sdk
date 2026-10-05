@@ -31,8 +31,11 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 # No status LED: the e-paper shows a status screen. It also holds the battery
 # switch (GPIO17) and powers the panel (GPIO6).
 CONFIG_HOMEHUB_LED_BACKEND_WAVESHARE_EPAPER_154=y
-# BOOT, active low. PWR (GPIO18) is not used yet.
+# BOOT, active low: tap to set up, hold to talk, hold 5 s to reset. PWR
+# (GPIO18) is not used yet.
 CONFIG_HOMEHUB_BUTTON_GPIO=0
+# Push-to-talk through the ES8311 codec, its mic and the speaker header.
+CONFIG_HOMEHUB_VOICE=y
 
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y

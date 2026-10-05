@@ -16,6 +16,7 @@
 
 #include "voice.h"
 
+#include <math.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -135,6 +136,29 @@ static size_t record(void) {
     return samples;
 }
 
+#if CONFIG_HOMEHUB_VOICE_CUES
+#define CUE_MS       120
+#define CUE_FADE_MS  12
+#define CUE_LEVEL    12000
+
+// A short tone on the speaker: high when recording starts, low when it stops.
+// Faded in and out so it doesn't click.
+static void play_cue(bool start) {
+    static int16_t tone[VOICE_PLAYER_RATE * CUE_MS / 1000];
+    const int n = sizeof(tone) / sizeof(tone[0]);
+    const int fade = VOICE_PLAYER_RATE * CUE_FADE_MS / 1000;
+    const float hz = start ? 880.0f : 587.0f;
+    for (int i = 0; i < n; i++) {
+        int edge = i < n - 1 - i ? i : n - 1 - i;
+        float gain = edge < fade ? (float)edge / fade : 1.0f;
+        tone[i] = (int16_t)(CUE_LEVEL * gain * sinf(2.0f * (float)M_PI * hz * i / VOICE_PLAYER_RATE));
+    }
+    voice_player_begin();
+    voice_player_write(tone, n);
+    voice_player_end();
+}
+#endif
+
 static bool fail(const char *why) {
     ESP_LOGW(TAG, "turn failed: %s", why);
     led_status_set_voice(LED_VOICE_ERROR);
@@ -204,6 +228,11 @@ static bool run_turn(void) {
     voice_player_stop();
     led_status_set_level(0);
     led_status_set_voice(LED_VOICE_LISTENING);
+#if CONFIG_HOMEHUB_VOICE_CUES
+    // Record only once it's over, or the note starts with the beep.
+    play_cue(true);
+    voice_player_wait(CUE_MS * 3);
+#endif
     muse_hatch_turn_begin();
     size_t samples = record();
     if (samples < VOICE_MIC_RATE * CAPTURE_MIN_MS / 1000) {
@@ -216,6 +245,11 @@ static bool run_turn(void) {
     ESP_LOGI(TAG, "recorded %.1fs", (double)samples / VOICE_MIC_RATE);
     led_status_set_voice(LED_VOICE_TRANSCRIBING);
     muse_hatch_turn_end();
+#if CONFIG_HOMEHUB_VOICE_CUES
+    // Let it finish: the reply's playback would cut it off.
+    play_cue(false);
+    voice_player_wait(CUE_MS * 3);
+#endif
     return reply();
 }
 

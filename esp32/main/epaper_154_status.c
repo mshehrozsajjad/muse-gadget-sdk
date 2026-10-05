@@ -699,3 +699,27 @@ void led_status_show_animation(void) {
     xSemaphoreGive(s_lock);
     if (was_image) xTaskNotifyGive(s_task);
 }
+
+// ---- Voice (until the e-paper shows it) -------------------------------------
+
+#if CONFIG_HOMEHUB_VOICE
+void led_status_set_voice(led_voice_t voice) {
+    static const char *const names[] = {
+        "idle", "listening", "transcribing", "thinking", "buffering", "speaking", "error",
+    };
+    static led_voice_t shown = LED_VOICE_IDLE;
+    if (voice == shown) return;  // the voice task repeats states
+    shown = voice;
+    if ((int)voice >= 0 && (size_t)voice < sizeof(names) / sizeof(names[0])) {
+        ESP_LOGI(TAG, "voice: %s", names[voice]);
+    }
+}
+
+void led_status_set_level(float level) {
+    (void)level;
+}
+
+void led_status_show_volume(int percent) {
+    ESP_LOGI(TAG, "volume %d%%", percent);
+}
+#endif
