@@ -35,12 +35,19 @@
 #              ESP32-S3-DevKitC-1 v1.1 N8R8 (status LED, no display)
 #   waveshare-c6-lcd-147
 #              Waveshare ESP32-C6-LCD-1.47 with a 172x320 status screen
+#   waveshare-s3-epaper-154
+#              Waveshare ESP32-S3-ePaper-1.54 V2 with a 200x200 e-paper
 #
 # The action defaults to build. Without PORT, flash and monitor use the only
 # matching serial port, if there is exactly one.
+#
+# sdkconfig.local, if present (git-ignored), loads last: put your SDK token
+# there as CONFIG_GADGET_SDK_TOKEN="mgst_...". MUSE_BUILD_ROOT puts the
+# build-<board> directories elsewhere; ESP-IDF can't build in a path with
+# spaces.
 set -euo pipefail
 
-usage() { sed -n '16,38p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '16,47p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 [ $# -ge 1 ] || usage 2
 case "$1" in -h|--help) usage ;; esac
@@ -84,6 +91,12 @@ case "$BOARD" in
     TARGET=esp32c6
     DEFAULTS="$DEFAULTS;devices/sdkconfig.$BOARD"
     # The C6's own USB-Serial-JTAG.
+    PORTS="/dev/cu.usbmodem* /dev/ttyACM*"
+    ;;
+  waveshare-s3-epaper-154)
+    TARGET=esp32s3
+    DEFAULTS="$DEFAULTS;devices/sdkconfig.$BOARD"
+    # The S3's own USB-Serial-JTAG.
     PORTS="/dev/cu.usbmodem* /dev/ttyACM*"
     ;;
   espressif-s3-devkitc-1)
@@ -131,7 +144,9 @@ if [ "$ACTION" != build ]; then
   PORT_ARGS=(-p "$PORT")
 fi
 
-BUILD_DIR="$PROJECT/build-$BOARD"
+[ -f "$PROJECT/sdkconfig.local" ] && DEFAULTS="$DEFAULTS;sdkconfig.local"
+
+BUILD_DIR="${MUSE_BUILD_ROOT:-$PROJECT}/build-$BOARD"
 cd "$PROJECT"
 exec idf.py -B "$BUILD_DIR" \
   -DIDF_TARGET="$TARGET" \

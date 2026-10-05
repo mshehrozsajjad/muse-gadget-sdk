@@ -33,7 +33,7 @@ class LinkEpaperStatusTest(unittest.TestCase):
         start = source.index("// ---- Pixels (host-tested)")
         (out / "epaper_pixels.inc").write_text(source[start:source.index("// ---- Panel", start)])
         cc = shlex.split(os.environ.get("CC", "cc"))
-        cmd = [*cc, "-std=c11", "-Wall", "-Wextra", "-Werror", "-I", str(out),
+        cmd = [*cc, "-std=c11", "-Wall", "-Wextra", "-Werror", "-I", str(out), "-I", str(ROOT / "main"),
                str(ROOT / "tests/link_epaper_status_harness.c"), "-o", str(out / "epaper")]
         compiled = subprocess.run(cmd, capture_output=True, text=True)
         if compiled.returncode:
@@ -73,14 +73,16 @@ class LinkEpaperStatusTest(unittest.TestCase):
         cmake = (ROOT / "main/CMakeLists.txt").read_text()
         self.assertRegex(cmake, r'if\(CONFIG_HOMEHUB_LED_BACKEND_RETERMINAL_UC8179\s+'
                                 r'OR CONFIG_HOMEHUB_LED_BACKEND_RETERMINAL_SPECTRA6\)\s*'
-                                r'list\(APPEND GADGET_SRCS "epaper_status.c"\)\s*else\(\)\s*'
+                                r'list\(APPEND GADGET_SRCS "epaper_status.c"\)\s*'
+                                r'elseif\(CONFIG_HOMEHUB_LED_BACKEND_WAVESHARE_EPAPER_154\)\s*'
+                                r'list\(APPEND GADGET_SRCS "epaper_154_status.c"\)\s*else\(\)\s*'
                                 r'list\(APPEND GADGET_SRCS "led_status.c"\)')
         # Both implementations provide the whole display interface.
         header = (ROOT / "main/led_status.h").read_text()
         for name in re.findall(r"^\w[\w ]*?\b(led_status_\w+)\(", header, re.M):
             if name in ("led_status_set_voice", "led_status_set_level", "led_status_show_volume"):
                 continue
-            for impl in ("led_status.c", "epaper_status.c"):
+            for impl in ("led_status.c", "epaper_status.c", "epaper_154_status.c"):
                 self.assertRegex((ROOT / "main" / impl).read_text(), rf"\n\w[\w ]*\b{name}\(",
                                  f"{impl} lacks {name}")
         fetch = (ROOT / "main/image_fetch.c").read_text()

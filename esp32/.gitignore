@@ -17,6 +17,8 @@ build/
 build-*/
 sdkconfig
 sdkconfig.old
+# Your own settings, such as the SDK token (tools/board.sh loads it last).
+sdkconfig.local
 managed_components/
 dependencies.lock
 .cache/
