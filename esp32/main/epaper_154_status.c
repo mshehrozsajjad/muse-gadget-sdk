@@ -18,7 +18,9 @@
 // 200x200 black and white e-paper on SPI with an SSD1681-type controller.
 // Like epaper_status.c for the reTerminal, it replaces led_status.c and shows
 // a still status screen (Wi-Fi and battery icons, the agent's name, the
-// character and the status text), redrawn only when one of them changes.
+// character and the status text), redrawn only when one of them changes. The
+// character is the SDK's own (avatar/muse_pixel.c), in the pose for the
+// state: one still frame per change, no animation.
 //
 // The board also gates its own power: GPIO17 holds the battery switch on once
 // PWR is released, and GPIO6 (active low) powers the panel. Both are set here,
@@ -49,7 +51,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
-#include "happy_anim.h"
+#include "muse_pixel.h"
 #include "pixel_font.h"
 #include "sdkconfig.h"
 #include "stack_monitor.h"
@@ -100,10 +102,9 @@ static const char *TAG = "link.led";
 #define BAR_MARGIN       4
 #define TITLE_Y          18
 #define TITLE_MAX_SCALE  2
-#define ANIM_SCALE       2
-#define ANIM_W           (HAPPY_ANIM_WIDTH * ANIM_SCALE)
-#define ANIM_X           ((EPD_W - ANIM_W) / 2)
-#define ANIM_Y           40
+#define CHARACTER_SIZE   112
+#define CHARACTER_X      ((EPD_W - CHARACTER_SIZE) / 2)
+#define CHARACTER_Y      44
 #define STATUS_Y         162
 #define STATUS_SCALE     2
 #define STATUS_LINE_GAP  4
@@ -192,6 +193,7 @@ static bool s_status_drawn;  // the status screen shows s_drawn_*
 static const char *s_drawn_label;
 static char s_drawn_title[48];
 static int s_drawn_wifi, s_drawn_battery;
+static muse_mode_t s_drawn_mode;
 
 // Requested by led_status_set_state() and _set_title(); guarded by s_mutex.
 static SemaphoreHandle_t s_mutex;
@@ -427,19 +429,37 @@ static void draw_status(const char *text, int y, int scale) {
     }
 }
 
-// The character, still: the first frame of the animation in gray, with its
-// black background as paper.
-static void draw_character(void) {
-    const uint8_t *cells = happy_anim_frames[0];
-    for (int cy = 0; cy < HAPPY_ANIM_HEIGHT; cy++) {
-        uint8_t *line = s_canvas + (size_t)(ANIM_Y + cy * ANIM_SCALE) * EPD_W + ANIM_X;
-        for (int cx = 0; cx < HAPPY_ANIM_WIDTH; cx++) {
-            uint8_t c = cells[cy * HAPPY_ANIM_WIDTH + cx];
-            uint16_t be = happy_anim_palette[c];
-            uint8_t v = c == 0 ? 255 : luma565((uint16_t)(be >> 8 | be << 8));
-            for (int k = 0; k < ANIM_SCALE; k++) line[cx * ANIM_SCALE + k] = v;
-        }
-        for (int k = 1; k < ANIM_SCALE; k++) memcpy(line + k * EPD_W, line, ANIM_W);
+// The character's pose for a connection state.
+static muse_mode_t character_mode(led_state_t state) {
+    switch (state) {
+        case LED_STATE_BOOT:              return MUSE_MODE_BOOT;
+        case LED_STATE_WIFI_CONNECTING:
+        case LED_STATE_WIFI_CONNECTED:
+        case LED_STATE_AUTH_OK:
+        case LED_STATE_VM_SWITCHING:
+        case LED_STATE_VM_OK:
+        case LED_STATE_WS_DISCONNECTED:   return MUSE_MODE_THINKING;
+        case LED_STATE_UNPAIRED:
+        case LED_STATE_ERROR:             return MUSE_MODE_ERROR;
+        default:                          return MUSE_MODE_IDLE;
+    }
+}
+
+// The character in `mode`, still, in gray, with its black background as
+// paper. The renderer eases its colours from one mode to the next over
+// time, so a few frames are rendered first to settle on the mode's own.
+static void draw_character(muse_mode_t mode) {
+    static uint16_t row[CHARACTER_SIZE];
+    muse_pose_t pose = {.mode = mode};
+    for (int i = 0; i < 10; i++) {
+        pose.t += 0.2f;
+        pose.mode_t += 0.2f;
+        muse_pixel_render(&pose);
+    }
+    for (int y = 0; y < CHARACTER_SIZE; y++) {
+        muse_pixel_scale(row, CHARACTER_SIZE, 0, CHARACTER_SIZE - 1, y, y);
+        uint8_t *line = s_canvas + (size_t)(CHARACTER_Y + y) * EPD_W + CHARACTER_X;
+        for (int x = 0; x < CHARACTER_SIZE; x++) line[x] = row[x] == 0 ? 255 : luma565(row[x]);
     }
 }
 
@@ -502,6 +522,7 @@ static void epd_task(void *arg) {
         char title[sizeof(s_title)];
         xSemaphoreTake(s_mutex, portMAX_DELAY);
         const char *label = status_label(s_state);
+        muse_mode_t mode = character_mode(s_state);
         memcpy(title, s_title, sizeof(title));
         xSemaphoreGive(s_mutex);
 
@@ -509,14 +530,15 @@ static void epd_task(void *arg) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
         bool redraw = !s_image_mode && (!s_status_drawn || label != s_drawn_label
                                         || strcmp(title, s_drawn_title) != 0
-                                        || wifi != s_drawn_wifi || battery != s_drawn_battery);
+                                        || mode != s_drawn_mode || wifi != s_drawn_wifi
+                                        || battery != s_drawn_battery);
         // A new screen after an image gets a full refresh too.
         bool full = !s_status_drawn || s_fast_refreshes >= FULL_REFRESH_EVERY;
         if (redraw) {
             memset(s_canvas, 255, CANVAS_BYTES);
             draw_status_bar(wifi, battery);
             draw_title(title, TITLE_Y, TITLE_MAX_SCALE);
-            draw_character();
+            draw_character(mode);
             draw_status(label, STATUS_Y, STATUS_SCALE);
             epd_dither();
             // An image drawn during the refresh clears this again.
@@ -525,6 +547,7 @@ static void epd_task(void *arg) {
             memcpy(s_drawn_title, title, sizeof(s_drawn_title));
             s_drawn_wifi = wifi;
             s_drawn_battery = battery;
+            s_drawn_mode = mode;
         }
         xSemaphoreGive(s_lock);
         if (redraw && epd_update(full) != ESP_OK) {
@@ -572,6 +595,7 @@ static esp_err_t epd_init(void) {
 
 bool led_status_init(void) {
     board_power_on();
+    muse_pixel_set_size(CHARACTER_SIZE);
     s_chunk = heap_caps_malloc(EPD_CHUNK_BYTES, MALLOC_CAP_DMA);
     s_canvas = heap_caps_malloc(CANVAS_BYTES, MALLOC_CAP_SPIRAM);
     s_frame = heap_caps_malloc(EPD_FRAME_BYTES, MALLOC_CAP_SPIRAM);
