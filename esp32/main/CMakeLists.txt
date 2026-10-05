@@ -57,6 +57,8 @@ set(GADGET_REQUIRES
     esp_driver_i2c
     esp_driver_ledc
     esp_driver_spi
+    # The Waveshare 1.54 inch e-paper board's battery level (battery_154.c).
+    esp_adc
     esp_driver_uart
     esp_lcd
     lwip
@@ -74,7 +76,7 @@ if(CONFIG_HOMEHUB_LED_BACKEND_RETERMINAL_UC8179
    OR CONFIG_HOMEHUB_LED_BACKEND_RETERMINAL_SPECTRA6)
     list(APPEND GADGET_SRCS "epaper_status.c")
 elseif(CONFIG_HOMEHUB_LED_BACKEND_WAVESHARE_EPAPER_154)
-    list(APPEND GADGET_SRCS "epaper_154_status.c")
+    list(APPEND GADGET_SRCS "epaper_154_status.c" "battery_154.c")
 else()
     list(APPEND GADGET_SRCS "led_status.c")
 endif()

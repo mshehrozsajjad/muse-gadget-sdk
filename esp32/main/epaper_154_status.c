@@ -17,8 +17,8 @@
 // led_status.h on the Waveshare ESP32-S3-ePaper-1.54 (V2): a 1.54 inch
 // 200x200 black and white e-paper on SPI with an SSD1681-type controller.
 // Like epaper_status.c for the reTerminal, it replaces led_status.c and shows
-// a still status screen (the agent's name, the character and the status
-// text), redrawn only when the text changes.
+// a still status screen (Wi-Fi and battery icons, the agent's name, the
+// character and the status text), redrawn only when one of them changes.
 //
 // The board also gates its own power: GPIO17 holds the battery switch on once
 // PWR is released, and GPIO6 (active low) powers the panel. Both are set here,
@@ -39,10 +39,13 @@
 
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
+#include "battery_154.h"
+#include "epaper_154_icons.h"
 #include "epaper_pixels.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -84,16 +87,24 @@ static const char *TAG = "link.led";
 // Fast refreshes leave a faint ghost of the old picture; every so often the
 // status gets a full refresh, which flashes but clears it.
 #define FULL_REFRESH_EVERY 10
+// How often the icons are checked. They change the screen only when a whole
+// bar or battery cell does, and only once past a margin, so that a reading
+// sitting on a threshold doesn't keep refreshing it.
+#define ICON_POLL_MS        60000
+#define WIFI_MARGIN_DB      3
+#define BATTERY_MARGIN_PCT  3
 
-// Status screen: the title on top, the character in the middle, up to two
-// lines of status text below.
-#define TITLE_Y          6
-#define TITLE_MAX_SCALE  3
+// Status screen: Wi-Fi and battery icons along the top, the title below them,
+// the character in the middle, up to two lines of status text at the bottom.
+#define BAR_Y            1
+#define BAR_MARGIN       4
+#define TITLE_Y          18
+#define TITLE_MAX_SCALE  2
 #define ANIM_SCALE       2
 #define ANIM_W           (HAPPY_ANIM_WIDTH * ANIM_SCALE)
 #define ANIM_X           ((EPD_W - ANIM_W) / 2)
-#define ANIM_Y           36
-#define STATUS_Y         160
+#define ANIM_Y           40
+#define STATUS_Y         162
 #define STATUS_SCALE     2
 #define STATUS_LINE_GAP  4
 
@@ -180,6 +191,7 @@ static bool s_image_dirty;   // drawn since the last refresh
 static bool s_status_drawn;  // the status screen shows s_drawn_*
 static const char *s_drawn_label;
 static char s_drawn_title[48];
+static int s_drawn_wifi, s_drawn_battery;
 
 // Requested by led_status_set_state() and _set_title(); guarded by s_mutex.
 static SemaphoreHandle_t s_mutex;
@@ -431,13 +443,62 @@ static void draw_character(void) {
     }
 }
 
+// Signal bars, 1 to 3, for an RSSI in dBm.
+static int wifi_bars_at(int rssi) {
+    if (rssi >= -60) return 3;
+    if (rssi >= -70) return 2;
+    return 1;
+}
+
+// Wi-Fi signal bars now, 0 when not connected. `previous` stands while the
+// RSSI is within the margin of its range.
+static int wifi_bars(int previous) {
+    int rssi;
+    if (esp_wifi_sta_get_rssi(&rssi) != ESP_OK) return 0;
+    int low = wifi_bars_at(rssi - WIFI_MARGIN_DB), high = wifi_bars_at(rssi + WIFI_MARGIN_DB);
+    if (previous >= low && previous <= high) return previous;
+    return wifi_bars_at(rssi);
+}
+
+// Filled battery cells, 0 to 4, for a charge in percent: each cell is 25 %,
+// centred on its share.
+static int battery_cells_at(int percent) {
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+    return (percent + 12) / 25;
+}
+
+// Battery cells now. `previous` (-1 at first) stands while the charge is
+// within the margin of its range.
+static int battery_cells(int previous) {
+    int mv = battery_154_millivolts();
+    int percent = battery_154_percent(mv);
+    int low = battery_cells_at(percent - BATTERY_MARGIN_PCT);
+    int high = battery_cells_at(percent + BATTERY_MARGIN_PCT);
+    if (previous >= low && previous <= high) return previous;
+    int cells = battery_cells_at(percent);
+    ESP_LOGI(TAG, "battery %d mV, %d%%: %d of %d cells", mv, percent, cells,
+             ICON_BATTERY_SEGMENTS);
+    return cells;
+}
+
+static void draw_status_bar(int wifi, int battery) {
+    icon_wifi(s_canvas, EPD_W, BAR_MARGIN, BAR_Y, wifi);
+    icon_battery(s_canvas, EPD_W, EPD_W - BAR_MARGIN - ICON_BATTERY_W, BAR_Y + 1, battery);
+}
+
 static void epd_task(void *arg) {
     (void)arg;
     stack_monitor_t stack = STACK_MONITOR_INIT;
+    int wifi = 0, battery = -1;
     for (;;) {
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        while (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(STATUS_SETTLE_MS))) {
+        // A status change, or time to check the icons.
+        if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(ICON_POLL_MS))) {
+            while (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(STATUS_SETTLE_MS))) {
+            }
         }
+        wifi = wifi_bars(wifi);
+        battery = battery_cells(battery);
         char title[sizeof(s_title)];
         xSemaphoreTake(s_mutex, portMAX_DELAY);
         const char *label = status_label(s_state);
@@ -447,11 +508,13 @@ static void epd_task(void *arg) {
         xSemaphoreTake(s_panel_lock, portMAX_DELAY);
         xSemaphoreTake(s_lock, portMAX_DELAY);
         bool redraw = !s_image_mode && (!s_status_drawn || label != s_drawn_label
-                                        || strcmp(title, s_drawn_title) != 0);
+                                        || strcmp(title, s_drawn_title) != 0
+                                        || wifi != s_drawn_wifi || battery != s_drawn_battery);
         // A new screen after an image gets a full refresh too.
         bool full = !s_status_drawn || s_fast_refreshes >= FULL_REFRESH_EVERY;
         if (redraw) {
             memset(s_canvas, 255, CANVAS_BYTES);
+            draw_status_bar(wifi, battery);
             draw_title(title, TITLE_Y, TITLE_MAX_SCALE);
             draw_character();
             draw_status(label, STATUS_Y, STATUS_SCALE);
@@ -460,6 +523,8 @@ static void epd_task(void *arg) {
             s_status_drawn = true;
             s_drawn_label = label;
             memcpy(s_drawn_title, title, sizeof(s_drawn_title));
+            s_drawn_wifi = wifi;
+            s_drawn_battery = battery;
         }
         xSemaphoreGive(s_lock);
         if (redraw && epd_update(full) != ESP_OK) {
@@ -521,6 +586,7 @@ bool led_status_init(void) {
         ESP_LOGE(TAG, "e-paper buffer alloc failed");
         return false;
     }
+    if (!battery_154_init()) ESP_LOGW(TAG, "no battery level: the icon stays empty");
     esp_err_t err = epd_init();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "1.54 inch e-paper init failed: %s", esp_err_to_name(err));
