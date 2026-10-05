@@ -84,8 +84,10 @@ static const char *TAG = "link.led";
 #define EPD_CHUNK_BYTES 4000
 
 // A status change waits this long for the next, so that the burst while
-// connecting costs one refresh.
+// connecting costs one refresh. A voice change waits much less: "Listening"
+// has to show while the button is still held.
 #define STATUS_SETTLE_MS 1500
+#define VOICE_SETTLE_MS  100
 // Fast refreshes leave a faint ghost of the old picture; every so often the
 // status gets a full refresh, which flashes but clears it.
 #define FULL_REFRESH_EVERY 10
@@ -195,9 +197,13 @@ static char s_drawn_title[48];
 static int s_drawn_wifi, s_drawn_battery;
 static muse_mode_t s_drawn_mode;
 
-// Requested by led_status_set_state() and _set_title(); guarded by s_mutex.
+// Requested by led_status_set_state(), _set_title() and _set_voice();
+// guarded by s_mutex. While a voice turn runs, its state stands in for the
+// connection's in the status text and the pose.
 static SemaphoreHandle_t s_mutex;
 static led_state_t s_state = LED_STATE_BOOT;
+static led_voice_t s_voice = LED_VOICE_IDLE;
+static bool s_voice_changed;  // settle quickly: the change is a voice one
 static char s_title[48];
 static TaskHandle_t s_task;
 
@@ -429,6 +435,30 @@ static void draw_status(const char *text, int y, int scale) {
     }
 }
 
+// The status text for a voice turn's state, NULL when idle.
+static const char *voice_label(led_voice_t voice) {
+    switch (voice) {
+        case LED_VOICE_LISTENING:    return "Listening";
+        case LED_VOICE_TRANSCRIBING:
+        case LED_VOICE_THINKING:
+        case LED_VOICE_BUFFERING:    return "Thinking";
+        case LED_VOICE_SPEAKING:     return "Replying";
+        case LED_VOICE_ERROR:        return "Didn't work, try again";
+        case LED_VOICE_IDLE:         break;
+    }
+    return NULL;
+}
+
+// The character's pose for a voice turn's state.
+static muse_mode_t voice_mode(led_voice_t voice) {
+    switch (voice) {
+        case LED_VOICE_LISTENING: return MUSE_MODE_LISTENING;
+        case LED_VOICE_SPEAKING:  return MUSE_MODE_SPEAKING;
+        case LED_VOICE_ERROR:     return MUSE_MODE_ERROR;
+        default:                  return MUSE_MODE_THINKING;
+    }
+}
+
 // The character's pose for a connection state.
 static muse_mode_t character_mode(led_state_t state) {
     switch (state) {
@@ -514,15 +544,20 @@ static void epd_task(void *arg) {
     for (;;) {
         // A status change, or time to check the icons.
         if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(ICON_POLL_MS))) {
-            while (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(STATUS_SETTLE_MS))) {
+            xSemaphoreTake(s_mutex, portMAX_DELAY);
+            int settle_ms = s_voice_changed ? VOICE_SETTLE_MS : STATUS_SETTLE_MS;
+            s_voice_changed = false;
+            xSemaphoreGive(s_mutex);
+            while (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(settle_ms))) {
             }
         }
         wifi = wifi_bars(wifi);
         battery = battery_cells(battery);
         char title[sizeof(s_title)];
         xSemaphoreTake(s_mutex, portMAX_DELAY);
-        const char *label = status_label(s_state);
-        muse_mode_t mode = character_mode(s_state);
+        const char *label = voice_label(s_voice);
+        muse_mode_t mode = label ? voice_mode(s_voice) : character_mode(s_state);
+        if (!label) label = status_label(s_state);
         memcpy(title, s_title, sizeof(title));
         xSemaphoreGive(s_mutex);
 
@@ -700,26 +735,26 @@ void led_status_show_animation(void) {
     if (was_image) xTaskNotifyGive(s_task);
 }
 
-// ---- Voice (until the e-paper shows it) -------------------------------------
+// ---- Voice -----------------------------------------------------------------
 
 #if CONFIG_HOMEHUB_VOICE
 void led_status_set_voice(led_voice_t voice) {
-    static const char *const names[] = {
-        "idle", "listening", "transcribing", "thinking", "buffering", "speaking", "error",
-    };
-    static led_voice_t shown = LED_VOICE_IDLE;
-    if (voice == shown) return;  // the voice task repeats states
-    shown = voice;
-    if ((int)voice >= 0 && (size_t)voice < sizeof(names) / sizeof(names[0])) {
-        ESP_LOGI(TAG, "voice: %s", names[voice]);
-    }
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool changed = s_voice != voice;  // the voice task repeats states
+    s_voice = voice;
+    if (changed) s_voice_changed = true;
+    xSemaphoreGive(s_mutex);
+    if (changed) xTaskNotifyGive(s_task);
 }
 
+// No live level meter: e-paper can't keep up with it.
 void led_status_set_level(float level) {
     (void)level;
 }
 
+// Nothing turns the volume on the device yet (no dial), so nothing to show.
 void led_status_show_volume(int percent) {
-    ESP_LOGI(TAG, "volume %d%%", percent);
+    (void)percent;
 }
 #endif

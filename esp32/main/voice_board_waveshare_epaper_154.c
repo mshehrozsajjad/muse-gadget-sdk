@@ -67,6 +67,11 @@ static esp_codec_dev_vol_map_t s_volume_map[] = {
 };
 // Samples per read or write: 20 ms.
 #define CHUNK           (AUDIO_RATE / 50)
+// The I2S receive ring: the mic always runs, so it holds the last 90 ms of
+// sound, the tail of the start beep among it, until a recording reads it.
+#define RX_DMA_DESCS    6
+#define RX_DMA_FRAMES   240
+#define RX_RING_FRAMES  (RX_DMA_DESCS * RX_DMA_FRAMES)
 
 static esp_codec_dev_handle_t s_speaker, s_mic;
 static bool s_mic_on;
@@ -95,6 +100,12 @@ void voice_board_amp(bool on) {
 
 esp_err_t voice_board_mic_start(void) {
     if (!s_mic) return ESP_ERR_INVALID_STATE;
+    // Drop what the ring already holds, so the recording starts now. It
+    // comes back at once, without waiting for new sound.
+    for (int left = RX_RING_FRAMES; left > 0; left -= CHUNK) {
+        int frames = left < CHUNK ? left : CHUNK;
+        esp_codec_dev_read(s_mic, s_stereo, frames * 2 * sizeof(int16_t));
+    }
     s_mic_on = true;
     return ESP_OK;
 }
@@ -158,6 +169,8 @@ static esp_err_t power_on(void) {
 static esp_err_t start_i2s(i2s_chan_handle_t *tx, i2s_chan_handle_t *rx) {
     i2s_chan_config_t chan = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
     chan.auto_clear = true;  // silence, not the last samples, when the player runs dry
+    chan.dma_desc_num = RX_DMA_DESCS;
+    chan.dma_frame_num = RX_DMA_FRAMES;
     esp_err_t err = i2s_new_channel(&chan, tx, rx);
     const i2s_std_config_t std = {
         .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(AUDIO_RATE),
