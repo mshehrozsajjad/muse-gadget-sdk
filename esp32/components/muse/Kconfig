@@ -167,4 +167,24 @@ menu "Muse"
             them. Needs PSRAM. Without it, voice notes go over Home Link's own
             session to its paired VM and replies are shown as text.
 
+    config MUSE_TTS_ELEVENLABS_API_KEY
+        string "ElevenLabs API key for spoken replies"
+        default ""
+        help
+            Speak Muse's replies with ElevenLabs text-to-speech. Like the SDK
+            token it ships inside the firmware, so use a key limited to
+            text-to-speech with a credit cap, and keep it in a git-ignored
+            sdkconfig.local. Empty: replies are text only.
+
+    config MUSE_TTS_ELEVENLABS_VOICE_ID
+        string "ElevenLabs voice ID"
+        default ""
+
+    config MUSE_TTS_ELEVENLABS_MODEL
+        string "ElevenLabs model"
+        default "eleven_v4_turbo"
+        help
+            eleven_v4_turbo: ElevenLabs' v4 voice quality at low latency
+            (~100 ms). eleven_flash_v2_5 is faster still (~75 ms).
+
 endmenu

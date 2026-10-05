@@ -75,7 +75,8 @@ class LinkEpaperStatusTest(unittest.TestCase):
                                 r'OR CONFIG_HOMEHUB_LED_BACKEND_RETERMINAL_SPECTRA6\)\s*'
                                 r'list\(APPEND GADGET_SRCS "epaper_status.c"\)\s*'
                                 r'elseif\(CONFIG_HOMEHUB_LED_BACKEND_WAVESHARE_EPAPER_154\)\s*'
-                                r'list\(APPEND GADGET_SRCS "epaper_154_status.c" "battery_154.c"\s*"../avatar/muse_pixel.c"\)\s*else\(\)\s*'
+                                r'list\(APPEND GADGET_SRCS "epaper_154_status.c" "battery_154.c" "climate_154.c"\s*'
+                                r'"board_154_i2c.c"\s*"../avatar/muse_pixel.c"\)\s*else\(\)\s*'
                                 r'list\(APPEND GADGET_SRCS "led_status.c"\)')
         # Both implementations provide the whole display interface.
         header = (ROOT / "main/led_status.h").read_text()

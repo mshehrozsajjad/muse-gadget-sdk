@@ -50,3 +50,8 @@ CONFIG_SPIRAM_SPEED_80M=y
 # The BLE controller already takes ~70 KB of internal RAM on the S3; keep the
 # NimBLE host's allocations in PSRAM so pairing has room.
 CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
+
+# ElevenLabs (spoken replies) sends GTS Root R1 cross-signed by GlobalSign
+# Root CA, which the bundle no longer has; this checks the chain against GTS
+# Root R1 instead, which it does. About 700 bytes of heap.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y

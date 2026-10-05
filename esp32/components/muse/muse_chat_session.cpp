@@ -51,6 +51,7 @@
 
 #include "esp_attr.h"
 #include "esp_crt_bundle.h"
+#include "muse_tts.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_random.h"
@@ -959,6 +960,7 @@ static void turn_finish(void)
     s_turn.tts_msg = -1;
     s_turn.silent = false;
     s_turn.mp3_len = 0;
+    muse_tts_cancel();
 }
 
 static void turn_fail(const char *why)
@@ -1530,6 +1532,23 @@ static void start_tts(void)
          * end. decode() plays it at the speaker's volume, captions following,
          * and finishes the message once it's drained.
          */
+        if (s_turn.texts && muse_tts_start(s_turn.texts + i * TEXT_MAX)) {
+            /* Spoken with ElevenLabs: tts_pump() brings the MP3 in, decode() plays it. */
+            m.tts = TTS_ACTIVE;
+            s_turn.tts_msg = i;
+            s_turn.silent = false;
+            m.pcm_start = s_turn.pcm_out;
+            m.pcm_frames = 0;
+            s_turn.mp3_len = 0;
+            s_turn.mp3_ended = false;
+            s_turn.kbps = 0;
+            s_turn.down_rate = 0;
+            mp3dec_init(&s_turn.dec);
+            mark(M_TTS);
+            ESP_LOGI(TAG, "speaking message %s (%u chars)", m.id, (unsigned)m.len);
+            show_reply_start(m);
+            return;
+        }
         m.pcm_start = s_turn.pcm_out;
         m.pcm_frames = (uint32_t)(m.len * MIC_RATE / TEXT_CHARS_PER_S);
         m.tts = TTS_ACTIVE;
@@ -1564,6 +1583,34 @@ static void tts_end(stream_t *s, bool ok)
     } else {
         s_turn.msgs[i].tts = TTS_FINISHED;
         s_turn.tts_msg = -1;
+    }
+}
+
+/* Moves ElevenLabs' MP3 into the reply's buffer while it has room; once it's
+ * all in (or the fetch failed), decode() drains the rest and finishes. */
+static void tts_pump(void)
+{
+    if (s_turn.tts_msg < 0 || s_turn.silent || s_turn.mp3_ended) {
+        return;
+    }
+    muse_tts_state_t state = muse_tts_state();   /* before draining: then "done" means drained */
+    size_t got = 0;
+    while (s_turn.mp3_len < MP3_BUF) {
+        size_t n = muse_tts_read(s_turn.mp3 + s_turn.mp3_len, MP3_BUF - s_turn.mp3_len);
+        if (!n) {
+            break;
+        }
+        s_turn.mp3_len += n;
+        got += n;
+    }
+    if (got) {
+        mark(M_MP3);
+    }
+    if (state == MUSE_TTS_FAILED) {
+        ESP_LOGW(TAG, "speech failed; playing what came");
+        s_turn.mp3_ended = true;
+    } else if (state == MUSE_TTS_DONE && !got && s_turn.mp3_len < MP3_BUF) {
+        s_turn.mp3_ended = true;   /* drained: an empty read with room to spare */
     }
 }
 
@@ -1989,6 +2036,7 @@ static void hatch_task(void *arg)
         }
         if (s_turn.phase == P_WAIT_REPLY) {
             start_tts();
+            tts_pump();
             decode();
         }
         if (!s_connected) {

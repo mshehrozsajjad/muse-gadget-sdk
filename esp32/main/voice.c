@@ -187,6 +187,8 @@ static void show_reply(void) {
     bool compact = more;
     if (compact) more = reply_page(true, page, sizeof(page));
     voice_reply_compact(false);
+    // The message is cleaned once it's complete; until then, clean the page.
+    muse_hatch_plain_text(page);
     led_status_show_reply(page, more, compact);
 }
 

@@ -36,12 +36,14 @@
 
 #include "led_status.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "battery_154.h"
+#include "climate_154.h"
 #include "epaper_154_icons.h"
 #include "epaper_pixels.h"
 #include "esp_heap_caps.h"
@@ -100,6 +102,8 @@ static const char *TAG = "link.led";
 #define ICON_POLL_MS        60000
 #define WIFI_MARGIN_DB      3
 #define BATTERY_MARGIN_PCT  3
+#define CLIMATE_MARGIN_C    0.8f
+#define CLIMATE_MARGIN_RH   3.0f
 
 // Status screen: Wi-Fi and battery icons along the top, the title below them,
 // the character in the middle, up to two lines of status text at the bottom.
@@ -226,6 +230,14 @@ static bool s_status_drawn;  // the status screen shows s_drawn_*
 static const char *s_drawn_label;
 static char s_drawn_title[48];
 static int s_drawn_wifi, s_drawn_battery;
+
+// Temperature and humidity as shown, whole degrees and percent; valid false
+// when the sensor doesn't answer, which leaves them off the bar.
+typedef struct {
+    bool valid;
+    int celsius, humidity;
+} climate_t;
+static climate_t s_drawn_climate;
 static muse_mode_t s_drawn_mode;
 static char s_drawn_reply[REPLY_MAX];
 static bool s_drawn_reply_more, s_drawn_reply_compact;
@@ -624,8 +636,50 @@ static int battery_cells(int previous) {
     return cells;
 }
 
-static void draw_status_bar(int wifi, int battery) {
+// Temperature and humidity now, in whole units. `previous` stands while the
+// reading is within the margin of it, so small drifts don't redraw the bar.
+static climate_t climate_now(climate_t previous) {
+    float celsius, humidity;
+    if (!climate_154_read(&celsius, &humidity)) return (climate_t){0};
+    climate_t now = {
+        .valid = true,
+        .celsius = (int)(celsius + (celsius < 0 ? -0.5f : 0.5f)),
+        .humidity = (int)(humidity + 0.5f),
+    };
+    if (previous.valid && fabsf(celsius - previous.celsius) < CLIMATE_MARGIN_C
+        && fabsf(humidity - previous.humidity) < CLIMATE_MARGIN_RH) {
+        return previous;
+    }
+    return now;
+}
+
+// A degree sign: a 4 x 4 ring, its top at `y`.
+static void draw_degree(int x, int y) {
+    static const uint8_t ring[4] = {0x6, 0x9, 0x9, 0x6};
+    for (int r = 0; r < 4; r++) {
+        for (int c = 0; c < 4; c++) {
+            if (ring[r] >> (3 - c) & 1) s_canvas[(size_t)(y + r) * EPD_W + x + c] = 0;
+        }
+    }
+}
+
+// "23°C 45%", centred between the icons, in the compact text's size.
+static void draw_climate(climate_t climate) {
+    if (!climate.valid) return;
+    const int halves = 3, adv = (PIXEL_FONT_WIDTH + 1) * halves / 2, degree_w = 6;
+    char temp[8], rest[12];
+    int nt = snprintf(temp, sizeof(temp), "%d", climate.celsius);
+    int nr = snprintf(rest, sizeof(rest), "C %d%%", climate.humidity);
+    int width = (nt + nr) * adv + degree_w;
+    int x = (EPD_W - width) / 2, y = BAR_Y + 1;
+    draw_run_halves(temp, nt, x, y, halves);
+    draw_degree(x + nt * adv, y);
+    draw_run_halves(rest, nr, x + nt * adv + degree_w, y, halves);
+}
+
+static void draw_status_bar(int wifi, int battery, climate_t climate) {
     icon_wifi(s_canvas, EPD_W, BAR_MARGIN, BAR_Y, wifi);
+    draw_climate(climate);
     icon_battery(s_canvas, EPD_W, EPD_W - BAR_MARGIN - ICON_BATTERY_W, BAR_Y + 1, battery);
 }
 
@@ -633,6 +687,7 @@ static void epd_task(void *arg) {
     (void)arg;
     stack_monitor_t stack = STACK_MONITOR_INIT;
     int wifi = 0, battery = -1;
+    climate_t climate = {0};
     int64_t card_until = 0;  // when the reply card goes, 0 while it stays
     for (;;) {
         // A status change, time to check the icons, or the card's time is up.
@@ -651,6 +706,7 @@ static void epd_task(void *arg) {
         }
         wifi = wifi_bars(wifi);
         battery = battery_cells(battery);
+        climate = climate_now(climate);
         char title[sizeof(s_title)];
         static char reply[REPLY_MAX];
         xSemaphoreTake(s_mutex, portMAX_DELAY);
@@ -678,6 +734,7 @@ static void epd_task(void *arg) {
                                         || strcmp(title, s_drawn_title) != 0
                                         || mode != s_drawn_mode || wifi != s_drawn_wifi
                                         || battery != s_drawn_battery
+                                        || memcmp(&climate, &s_drawn_climate, sizeof(climate)) != 0
                                         || strcmp(reply, s_drawn_reply) != 0
                                         || reply_more != s_drawn_reply_more
                                         || reply_compact != s_drawn_reply_compact);
@@ -685,7 +742,7 @@ static void epd_task(void *arg) {
         bool full = !s_status_drawn || s_fast_refreshes >= FULL_REFRESH_EVERY;
         if (redraw) {
             memset(s_canvas, 255, CANVAS_BYTES);
-            draw_status_bar(wifi, battery);
+            draw_status_bar(wifi, battery, climate);
 #if CONFIG_HOMEHUB_VOICE
             if (reply[0]) {
                 draw_reply(reply, reply_more, reply_compact ? &s_layout_compact : &s_layout_normal);
@@ -703,6 +760,7 @@ static void epd_task(void *arg) {
             memcpy(s_drawn_title, title, sizeof(s_drawn_title));
             s_drawn_wifi = wifi;
             s_drawn_battery = battery;
+            s_drawn_climate = climate;
             s_drawn_mode = mode;
             memcpy(s_drawn_reply, reply, sizeof(s_drawn_reply));
             s_drawn_reply_more = reply_more;
@@ -770,6 +828,7 @@ bool led_status_init(void) {
         return false;
     }
     if (!battery_154_init()) ESP_LOGW(TAG, "no battery level: the icon stays empty");
+    if (!climate_154_init()) ESP_LOGW(TAG, "no temperature or humidity on the bar");
     esp_err_t err = epd_init();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "1.54 inch e-paper init failed: %s", esp_err_to_name(err));

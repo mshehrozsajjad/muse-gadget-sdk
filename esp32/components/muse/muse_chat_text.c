@@ -189,14 +189,18 @@ size_t muse_hatch_plain_text(char *s)
     bool line_start = true;
     for (char *p = s; *p;) {
         if (line_start && *p == '#') {
-            while (*p == '#') {
-                p++;
+            const char *q = p;
+            while (*q == '#') {
+                q++;
             }
-            while (*p == ' ') {
-                p++;
+            if (*q == ' ') {   /* a heading, not "#1" or a hashtag */
+                while (*q == ' ') {
+                    q++;
+                }
+                p = (char *)q;
+                line_start = false;
+                continue;
             }
-            line_start = false;
-            continue;
         }
         if (*p == '[') {
             char *close = strpbrk(p + 1, "]\n");

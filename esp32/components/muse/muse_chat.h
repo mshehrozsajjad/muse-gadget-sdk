@@ -99,6 +99,11 @@ typedef enum {
 /* Non-blocking; copies the event's text. Events of cancelled turns are dropped. */
 muse_hatch_ev_t muse_hatch_turn_event(char *text, size_t cap);
 
+/* Markdown to plain text in place, for captions and speech: a link
+ * [text](url) keeps its text; emphasis and code marks (* `) and heading marks
+ * ("# " at a line's start) go. Returns the new length. */
+size_t muse_hatch_plain_text(char *s);
+
 /*
  * The page of reply text holding what's being said after `played` frames of
  * reply speech (sized by muse_state_page), or before the speech its opening

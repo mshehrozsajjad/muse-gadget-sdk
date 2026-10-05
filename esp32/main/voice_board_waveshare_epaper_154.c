@@ -28,6 +28,8 @@
 
 #include "voice_board.h"
 
+#include "board_154_i2c.h"
+
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "driver/i2s_std.h"
@@ -41,8 +43,6 @@ static const char *TAG = "link.audio";
 
 #define AUDIO_PIN_POWER 42  // low powers the codec and amplifier
 #define AUDIO_PIN_AMP   46  // high enables the amplifier
-#define AUDIO_PIN_SDA   47
-#define AUDIO_PIN_SCL   48
 #define AUDIO_PIN_MCLK  14
 #define AUDIO_PIN_BCLK  15
 #define AUDIO_PIN_WS    38
@@ -56,13 +56,13 @@ static const char *TAG = "link.audio";
 #define MIC_GAIN_DB     30.0f           // Waveshare's example gain
 
 // Volume to the DAC's level, listened to on the board's speaker: 60 %, the
-// SDK's default, is comfortable at arm's length, and 100 % is the DAC's full
+// SDK's default, suits speech at arm's length, and 100 % is the DAC's full
 // level, already loud, with no digital boost to distort speech. The codec
 // library takes 2.4 dB off each point, which it credits to the amplifier
 // (es8311 hw_gain), so every value here is 2.4 dB above the level it sets.
 static esp_codec_dev_vol_map_t s_volume_map[] = {
     {.vol = 0, .db_value = -93.1f},   // -95.5 dB: the DAC's quietest
-    {.vol = 60, .db_value = -3.6f},   // -6 dB
+    {.vol = 60, .db_value = -0.6f},   // -3 dB
     {.vol = 100, .db_value = 2.4f},   // 0 dB
 };
 // Samples per read or write: 20 ms.
@@ -191,17 +191,8 @@ static esp_err_t start_i2s(i2s_chan_handle_t *tx, i2s_chan_handle_t *rx) {
 }
 
 static esp_err_t start_codec(i2s_chan_handle_t tx, i2s_chan_handle_t rx) {
-    i2c_master_bus_handle_t bus;
-    const i2c_master_bus_config_t bus_cfg = {
-        .i2c_port = I2C_NUM_0,
-        .sda_io_num = AUDIO_PIN_SDA,
-        .scl_io_num = AUDIO_PIN_SCL,
-        .clk_source = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7,
-        .flags.enable_internal_pullup = true,
-    };
-    esp_err_t err = i2c_new_master_bus(&bus_cfg, &bus);
-    if (err != ESP_OK) return err;
+    i2c_master_bus_handle_t bus = board_154_i2c_bus();  // shared with the SHTC3
+    if (!bus) return ESP_FAIL;
 
     audio_codec_i2s_cfg_t i2s_cfg = {.port = I2S_NUM_0, .rx_handle = rx, .tx_handle = tx};
     audio_codec_i2c_cfg_t i2c_cfg = {
