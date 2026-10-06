@@ -667,12 +667,16 @@ static int wifi_bars(int previous) {
     return wifi_bars_at(rssi);
 }
 
-// Filled battery cells, 0 to 4, for a charge in percent: each cell is 25 %,
-// centred on its share.
+// Filled battery cells, 0 to 4, for a charge in percent: 4 from 81 %, 3 from
+// 56 %, 2 from 31 %, 1 from 6 %. The reading is taken under load (CPU, Wi-Fi)
+// and nothing reports "charge complete", so a full cell reads ~4.05-4.1 V,
+// short of 4.2 V; rounding to the nearest cell instead (4 only from 88 %)
+// showed a full battery as 3 cells.
 static int battery_cells_at(int percent) {
     if (percent < 0) percent = 0;
     if (percent > 100) percent = 100;
-    return (percent + 12) / 25;
+    int cells = (percent + 19) / 25;
+    return cells > ICON_BATTERY_SEGMENTS ? ICON_BATTERY_SEGMENTS : cells;
 }
 
 // Battery cells now. `previous` (-1 at first) stands while the charge is
@@ -682,8 +686,8 @@ static int battery_cells(int previous) {
     int percent = battery_154_percent(mv);
     int low = battery_cells_at(percent - BATTERY_MARGIN_PCT);
     int high = battery_cells_at(percent + BATTERY_MARGIN_PCT);
-    if (previous >= low && previous <= high) return previous;
-    int cells = battery_cells_at(percent);
+    int cells = (previous >= low && previous <= high) ? previous : battery_cells_at(percent);
+    // Logged on every poll so the reading can be checked against a meter.
     ESP_LOGI(TAG, "battery %d mV, %d%%: %d of %d cells", mv, percent, cells,
              ICON_BATTERY_SEGMENTS);
     return cells;
