@@ -50,6 +50,20 @@ menu "ESP32 Device SDK"
             Password for CONFIG_HOMEHUB_WIFI_SSID. Ignored when the SSID
             override is empty.
 
+    config HOMEHUB_WIFI_SEED_SSID
+        string "WiFi network to add to the saved list"
+        default ""
+        help
+            If non-empty, this network is added to the device's saved list
+            (most recent first) at boot, where it stays after the option is
+            cleared. Unlike the override above, the device still picks the
+            strongest saved network in range. Set it in a git-ignored
+            sdkconfig.local, flash once, then clear it.
+
+    config HOMEHUB_WIFI_SEED_PASSWORD
+        string "Password for the WiFi network to add"
+        default ""
+
     config HOMEHUB_TOKEN_REFRESH_INTERVAL_DAYS
         int "Proactive device token refresh interval (days, 0 = disabled)"
         range 0 365

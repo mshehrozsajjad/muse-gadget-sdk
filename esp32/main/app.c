@@ -2101,6 +2101,71 @@ static void open_setup_window(const char *reason) {
     enter_advertising_state(reason);
 }
 
+#if !CONFIG_MUSE_ENABLED
+// ---- Offline: looking for any saved network ---------------------------------
+//
+// After a dropout wifi_mgr keeps retrying the network it lost, and a boot with
+// none in range never tries again, so a saved network elsewhere (another
+// place, a phone hotspot) would need a restart. While offline the heartbeat
+// looks for the strongest saved network instead, at growing intervals so a
+// place with none costs little: 1, 2, 4, 8 and 15 minutes, then every 30. A
+// button press looks at once. In between, nothing retries (join_saved_networks
+// stops wifi_mgr's own attempts).
+
+static const int s_rescan_minutes[] = {1, 2, 4, 8, 15, 30};
+#define RESCAN_STEPS ((int)(sizeof(s_rescan_minutes) / sizeof(s_rescan_minutes[0])))
+static int s_rescan_step;
+static int64_t s_rescan_at;          // 0 while online
+static atomic_bool s_rescan_now;     // a button press: look on the next tick
+
+static int64_t rescan_delay_us(int step) {
+    return s_rescan_minutes[step] * 60LL * 1000000LL;
+}
+
+// On the heartbeat (the main task: join_saved_networks reads NVS).
+static void rescan_saved_networks(void) {
+    if (!config_setup_complete() || wifi_mgr_is_connected()) {
+        s_rescan_step = 0;
+        s_rescan_at = 0;
+        return;
+    }
+    int64_t now = esp_timer_get_time();
+    bool asked = atomic_exchange(&s_rescan_now, false);
+    if (!s_rescan_at && !asked) {
+        s_rescan_at = now + rescan_delay_us(0);  // just went offline
+        return;
+    }
+    if (!asked && now < s_rescan_at) return;
+    if (!operation_gate_take(0, "wifi rescan")) return;
+    bool paired = config_is_provisioned();
+    char joined[WIFI_KNOWN_SSID_MAX + 1];
+    ESP_LOGI(TAG, "offline: looking for a saved wifi network");
+    app_wifi_join_t result = join_saved_networks(WIFI_CONNECT_TIMEOUT_MS, JOIN_ANY, paired, joined);
+    if (result == APP_WIFI_JOINED) {
+        ui_set_wifi(joined);
+        ui_set_status("wifi_connected");
+        persist_connected_wifi_channel();
+        s_rescan_step = 0;
+        s_rescan_at = 0;
+        // After a dropout the session reconnects by itself; after a boot
+        // with no network it never started.
+        if (paired && !noise_ctrl_is_running()) {
+            bool connected = ensure_access_token_ready_with_gate_held(false, true)
+                             && connect_preferred_vm_with_gate_held(0);
+            ui_set_status(connected ? "auth_ok" : "auth_failed");
+            led_status_set_state(connected ? LED_STATE_AUTH_OK : LED_STATE_ERROR);
+        }
+    } else {
+        if (s_rescan_step < RESCAN_STEPS - 1) s_rescan_step++;
+        s_rescan_at = now + rescan_delay_us(s_rescan_step);
+        if (paired) led_status_set_state(LED_STATE_WS_DISCONNECTED);
+        ESP_LOGI(TAG, "no saved wifi network joined; looking again in %d min",
+                 s_rescan_minutes[s_rescan_step]);
+    }
+    operation_gate_give();
+}
+#endif
+
 static void on_button_short_press(void) {
     factory_test_on_button_press();
 
@@ -2122,6 +2187,13 @@ static void on_button_short_press(void) {
         return;
     }
 
+#if !CONFIG_MUSE_ENABLED
+    if (!wifi_mgr_is_connected()) {
+        ESP_LOGI(TAG, "button short-press: offline, looking for a saved wifi network");
+        atomic_store(&s_rescan_now, true);
+        return;
+    }
+#endif
     ESP_LOGI(TAG, "button short-press ignored; setup already complete");
 }
 
@@ -2480,6 +2552,12 @@ void app_run(void) {
 
     config_store_init();
     wifi_known_init();
+    if (CONFIG_HOMEHUB_WIFI_SEED_SSID[0]) {
+        ESP_LOGI(TAG, "adding %s to the saved wifi networks", CONFIG_HOMEHUB_WIFI_SEED_SSID);
+        if (!wifi_known_remember(CONFIG_HOMEHUB_WIFI_SEED_SSID, CONFIG_HOMEHUB_WIFI_SEED_PASSWORD, -1)) {
+            ESP_LOGW(TAG, "failed to save wifi network");
+        }
+    }
 
     identity_init();
 #if CONFIG_MUSE_ENABLED
@@ -2751,6 +2829,8 @@ void app_run(void) {
 
 #if CONFIG_MUSE_ENABLED
         muse_keep_vm_session();
+#else
+        rescan_saved_networks();
 #endif
 
         // Runs on every heartbeat tick, and does two things.
