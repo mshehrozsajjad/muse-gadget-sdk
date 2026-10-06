@@ -26,7 +26,8 @@
 static const char *TAG = "link.button";
 
 #define BTN_GPIO           CONFIG_HOMEHUB_BUTTON_GPIO
-#define LONG_PRESS_MS      5000
+#define LONG_PRESS_MS      (CONFIG_HOMEHUB_BUTTON_RESET_HOLD_S * 1000)
+#define HOLD_WARN_MS       5000  // the countdown before the reset
 #define SHORT_PRESS_MAX_MS 1000
 #define DOUBLE_CLICK_MS    400
 #define POLL_MS            50
@@ -34,6 +35,11 @@ static const char *TAG = "link.button";
 static button_cb s_short_press_cb = NULL;
 static button_cb s_double_press_cb = NULL;
 static button_cb s_long_press_cb = NULL;
+static volatile button_hold_cb s_hold_cb = NULL;
+
+void button_set_hold_cb(button_hold_cb cb) {
+    s_hold_cb = cb;
+}
 #if CONFIG_HOMEHUB_VOICE
 static volatile button_press_cb s_press_cb = NULL;
 
@@ -49,12 +55,20 @@ static void button_task(void *arg) {
     bool fired = false;
     int click_count = 0;
     int64_t last_release = 0;
+    int warned_left = 0;  // the countdown's last value, 0 when none is shown
 #if CONFIG_HOMEHUB_VOICE
     bool claimed = false;
 #endif
 
     while (1) {
         bool pressed = (gpio_get_level(BTN_GPIO) == 0);
+
+        if (!pressed && warned_left) {
+            // Let go during the countdown: no reset.
+            warned_left = 0;
+            button_hold_cb hold_cb = s_hold_cb;
+            if (hold_cb) hold_cb(0);
+        }
 
         if (pressed && !was_pressed) {
             press_start = esp_timer_get_time();
@@ -79,6 +93,13 @@ static void button_task(void *arg) {
                 if (s_long_press_cb) s_long_press_cb();
                 fired = true;
                 click_count = 0;
+            } else if (held_ms >= LONG_PRESS_MS - HOLD_WARN_MS) {
+                int left = (int)((LONG_PRESS_MS - held_ms + 999) / 1000);
+                button_hold_cb hold_cb = s_hold_cb;
+                if (left != warned_left && hold_cb) {
+                    warned_left = left;
+                    hold_cb(left);
+                }
             }
         } else if (!pressed && was_pressed && !fired) {
             int64_t held_ms = (esp_timer_get_time() - press_start) / 1000;
@@ -128,7 +149,6 @@ bool button_init(button_cb on_short_press, button_cb on_double_press,
     }
 
     xTaskCreate(button_task, "btn", 4096, NULL, 2, NULL);
-    ESP_LOGI(TAG, "button ready (GPIO %d: tap=retry wifi, 2x=rescan, hold %ds=reset setup)",
-             BTN_GPIO, LONG_PRESS_MS / 1000);
+    ESP_LOGI(TAG, "button ready (GPIO %d: hold %ds=reset setup)", BTN_GPIO, LONG_PRESS_MS / 1000);
     return true;
 }

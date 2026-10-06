@@ -2700,6 +2700,7 @@ void app_run(void) {
                      on_button_long_press)) {
         ESP_LOGW(TAG, "button init failed — physical setup reset unavailable");
     }
+    button_set_hold_cb(led_status_show_reset_countdown);
 #endif
 #if CONFIG_HOMEHUB_VOICE
     voice_init();

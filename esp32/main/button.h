@@ -29,3 +29,10 @@ bool button_init(button_cb on_short_press, button_cb on_double_press,
 typedef bool (*button_press_cb)(bool pressed);
 
 void button_set_press_cb(button_press_cb cb);
+
+// Called from the button task during the last seconds of a hold that will
+// reset setup: the whole seconds left (5 down to 1), then 0 if the button is
+// released first. Must not block.
+typedef void (*button_hold_cb)(int seconds_left);
+
+void button_set_hold_cb(button_hold_cb cb);

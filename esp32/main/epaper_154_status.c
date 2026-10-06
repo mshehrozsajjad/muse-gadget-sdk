@@ -264,6 +264,7 @@ static led_state_t s_state = LED_STATE_BOOT;
 static led_voice_t s_voice = LED_VOICE_IDLE;
 static bool s_voice_changed;  // settle quickly: the change is a voice one
 static uint32_t s_pose_generation; // captures rapid leave/re-enter during a panel refresh
+static int s_reset_left;         // the button's reset countdown, 0 for none
 static char s_reply[REPLY_MAX];  // the reply card's page, "" for none
 static bool s_reply_more;        // the reply goes on past the page
 static bool s_reply_compact;     // laid out with s_layout_compact
@@ -509,6 +510,17 @@ static void draw_status(const char *text, int y, int scale) {
         draw_run(rest, n2, centred_x(n2, scale), y + PIXEL_FONT_HEIGHT * scale + STATUS_LINE_GAP,
                  scale);
     }
+}
+
+// The status text for the reset countdown, `left` seconds from 1 to 5.
+static const char *countdown_label(int left) {
+    static const char *const labels[] = {
+        "Keep holding to reset 1", "Keep holding to reset 2", "Keep holding to reset 3",
+        "Keep holding to reset 4", "Keep holding to reset 5",
+    };
+    if (left < 1) left = 1;
+    if (left > 5) left = 5;
+    return labels[left - 1];
 }
 
 // The status text for a voice turn's state, NULL when idle.
@@ -763,12 +775,19 @@ static void epd_task(void *arg) {
         muse_mode_t mode = label ? voice_mode(s_voice) : character_mode(s_state);
         uint32_t generation = s_pose_generation;
         bool voice_idle = s_voice == LED_VOICE_IDLE;
-        bool boot_allowed = s_voice == LED_VOICE_IDLE && s_state != LED_STATE_ERROR &&
+        int reset_left = s_reset_left;
+        bool boot_allowed = !reset_left && s_voice == LED_VOICE_IDLE && s_state != LED_STATE_ERROR &&
                             s_state != LED_STATE_UNPAIRED &&
                             s_state != LED_STATE_PAIRING_CONFIRM_REQUIRED && !reply[0];
         if (!label) label = status_label(s_state);
         memcpy(title, s_title, sizeof(title));
         xSemaphoreGive(s_mutex);
+        if (reset_left) {
+            // Over everything, the card included, until the button is let go.
+            label = countdown_label(reset_left);
+            mode = MUSE_MODE_ERROR;
+            reply[0] = '\0';
+        }
 
         xSemaphoreTake(s_panel_lock, portMAX_DELAY);
         xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -798,7 +817,7 @@ static void epd_task(void *arg) {
         // The first screen, and the first after an image or a failed refresh,
         // is full. Otherwise the ghosting is cleaned when the screen is calm.
         bool animating = animation.last && animation.frame < animation.last;
-        bool calm = voice_idle && !reply[0] && !animating;
+        bool calm = voice_idle && !reply[0] && !animating && !reset_left;
         bool full = !s_status_drawn || s_fast_refreshes >= CLEAN_FORCE_FAST
                     || (calm && s_fast_refreshes >= CLEAN_AFTER_FAST);
         if (redraw) {
@@ -940,6 +959,19 @@ void led_status_set_title(const char *title) {
     snprintf(s_title, sizeof(s_title), "%s", title ? title : "");
     xSemaphoreGive(s_mutex);
     xTaskNotifyGive(s_task);
+}
+
+void led_status_show_reset_countdown(int seconds_left) {
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool changed = s_reset_left != seconds_left;
+    s_reset_left = seconds_left;
+    if (changed) {
+        s_voice_changed = true;  // show it at once, as a voice change would
+        s_pose_generation++;
+    }
+    xSemaphoreGive(s_mutex);
+    if (changed) xTaskNotifyGive(s_task);
 }
 
 bool led_status_display_info(int *width, int *height) {

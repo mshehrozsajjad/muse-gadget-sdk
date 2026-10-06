@@ -568,6 +568,11 @@ void led_status_set_title(const char *title) {
     xTaskNotifyGive(s_task);
 }
 
+// No countdown here: the reset still comes after the hold.
+void led_status_show_reset_countdown(int seconds_left) {
+    (void)seconds_left;
+}
+
 bool led_status_display_info(int *width, int *height) {
     if (!s_ready) return false;
     *width = EPD_W;

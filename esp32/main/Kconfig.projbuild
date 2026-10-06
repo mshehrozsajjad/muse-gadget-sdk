@@ -311,6 +311,15 @@ menu "ESP32 Device SDK"
             switch is on, the button keeps its setup role (tap to confirm
             pairing, hold to reset).
 
+    config HOMEHUB_BUTTON_RESET_HOLD_S
+        int "Seconds to hold the button to reset setup"
+        range 3 60
+        default 5
+        help
+            Holding the button this long (unless push-to-talk has the press)
+            unpairs the device and forgets its Wi-Fi. Boards that show it
+            count down the last five seconds, so a release can cancel it.
+
     config HOMEHUB_VOICE_CUES
         bool "Beep when recording starts and stops"
         depends on HOMEHUB_VOICE

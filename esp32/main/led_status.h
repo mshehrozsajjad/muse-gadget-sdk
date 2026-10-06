@@ -42,6 +42,9 @@ void led_status_set_state(led_state_t state);
 // Show a short title (the agent's name) on backends with a display; NULL or ""
 // clears it. Other backends ignore it.
 void led_status_set_title(const char *title);
+// The button's reset countdown: seconds left (1 to 5) over whatever is shown,
+// 0 to take it away. Backends without a screen ignore it.
+void led_status_show_reset_countdown(int seconds_left);
 
 // Display backends only: the screen size in pixels. Returns false without a
 // display.

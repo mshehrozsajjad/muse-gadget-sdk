@@ -1192,6 +1192,11 @@ void led_status_show_reply(const char *page, bool more, bool compact) {
 }
 #endif
 
+// No countdown here: the reset still comes after the hold.
+void led_status_show_reset_countdown(int seconds_left) {
+    (void)seconds_left;
+}
+
 bool led_status_display_info(int *width, int *height) {
 #if CONFIG_HOMEHUB_DISPLAY
     if (!s_panel) return false;
