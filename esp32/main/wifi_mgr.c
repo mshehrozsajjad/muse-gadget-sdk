@@ -24,6 +24,7 @@
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "soc/soc_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -241,6 +242,43 @@ void wifi_mgr_init(void) {
     }
 }
 
+#if CONFIG_HOMEHUB_WIFI_DEEP_SLEEP_WHEN_IDLE
+#define POWER_IDLE_AFTER_US (15LL * 1000 * 1000)
+
+static atomic_bool s_power_held;
+static atomic_llong s_power_released_us;
+static atomic_int s_power_mode = WIFI_PS_MIN_MODEM;  // as wifi_mgr_init sets it
+
+static void set_power_mode(wifi_ps_type_t mode) {
+    if (!s_inited || atomic_exchange(&s_power_mode, mode) == (int)mode) return;
+    esp_wifi_set_ps(mode);
+    ESP_LOGI(TAG, "modem sleep: %s", mode == WIFI_PS_MAX_MODEM ? "deep (idle)" : "light");
+}
+
+void wifi_mgr_power_hold(bool held) {
+    atomic_store(&s_power_held, held);
+    if (held) {
+        set_power_mode(WIFI_PS_MIN_MODEM);
+    } else {
+        atomic_store(&s_power_released_us, esp_timer_get_time());
+    }
+}
+
+void wifi_mgr_power_check(bool settled) {
+    bool idle = settled && !atomic_load(&s_power_held)
+                && esp_timer_get_time() - atomic_load(&s_power_released_us) >= POWER_IDLE_AFTER_US;
+    set_power_mode(idle ? WIFI_PS_MAX_MODEM : WIFI_PS_MIN_MODEM);
+}
+#else
+void wifi_mgr_power_hold(bool held) {
+    (void)held;
+}
+
+void wifi_mgr_power_check(bool settled) {
+    (void)settled;
+}
+#endif
+
 bool wifi_mgr_connect(const char *ssid, const char *password, int timeout_ms) {
     if (!s_inited) wifi_mgr_init();
 
@@ -282,7 +320,7 @@ bool wifi_mgr_connect(const char *ssid, const char *password, int timeout_ms) {
     }
     wc.sta.threshold.authmode = WIFI_AUTH_OPEN;
     wc.sta.pmf_cfg.capable = true;
-#if CONFIG_MUSE_ENABLED
+#if CONFIG_MUSE_ENABLED || CONFIG_HOMEHUB_WIFI_DEEP_SLEEP_WHEN_IDLE
     // Beacons between wakes in max modem sleep (Muse asleep on battery):
     // about 1 s at the usual 102.4 ms interval, a third of the wakes of the
     // default 3. Min modem sleep (awake between turns) wakes every DTIM.

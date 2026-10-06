@@ -49,6 +49,13 @@ void wifi_mgr_disconnect(void);
 
 bool wifi_mgr_is_connected(void);
 
+// Modem sleep for voice turns (CONFIG_HOMEHUB_WIFI_DEEP_SLEEP_WHEN_IDLE; no-ops
+// without it). Held, the radio wakes at every beacon. Released for 15 s, and
+// `settled` (Wi-Fi and Muse connected) on the next check, it wakes about once
+// a second. Hold from any task; check from the main loop.
+void wifi_mgr_power_hold(bool held);
+void wifi_mgr_power_check(bool settled);
+
 // While wifi_mgr_connect() is joining a network, copies its name out and
 // returns true.
 bool wifi_mgr_joining(char *ssid, size_t cap);

@@ -60,6 +60,13 @@ CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=y
 # CONFIG_PM_POWER_DOWN_CPU_IN_LIGHT_SLEEP is not set
 # CONFIG_ESP_SLEEP_GPIO_RESET_WORKAROUND is not set
 
+# Fewer wakes while idle: the radio about once a second between voice turns,
+# the main loop every 30 s once connected, and the paddle waking the chip
+# rather than being checked 20 times a second.
+CONFIG_HOMEHUB_WIFI_DEEP_SLEEP_WHEN_IDLE=y
+CONFIG_HOMEHUB_HEARTBEAT_IDLE_S=30
+CONFIG_HOMEHUB_BUTTON_WAKE=y
+
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y

@@ -2900,7 +2900,12 @@ void app_run(void) {
 #if CONFIG_MUSE_ENABLED
         muse_heartbeat_pause();
 #else
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        // Connected, there's little to do: tick slower, and let the radio
+        // sleep deeper between voice turns. Offline, tick every 5 s for the
+        // Wi-Fi rescan.
+        bool settled = wifi_mgr_is_connected() && noise_ctrl_is_connected();
+        wifi_mgr_power_check(settled);
+        vTaskDelay(pdMS_TO_TICKS(settled ? CONFIG_HOMEHUB_HEARTBEAT_IDLE_S * 1000 : 5000));
 #endif
     }
 }

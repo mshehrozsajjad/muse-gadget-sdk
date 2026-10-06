@@ -332,6 +332,36 @@ menu "ESP32 Device SDK"
             bool "Maximum (several beacons)"
     endchoice
 
+    config HOMEHUB_WIFI_DEEP_SLEEP_WHEN_IDLE
+        bool "Deeper Wi-Fi sleep between voice turns"
+        depends on HOMEHUB_WIFI_POWER_SAVE_MIN && HOMEHUB_VOICE
+        default n
+        help
+            Once Muse is connected and no voice turn has run for 15 seconds,
+            the radio wakes about once a second (maximum modem sleep, ten
+            beacons apart) instead of at every beacon. A press switches back
+            at once, so turns and replies are as quick as before; only what
+            Muse sends unasked while idle waits up to a second.
+
+    config HOMEHUB_HEARTBEAT_IDLE_S
+        int "Seconds between status checks once connected"
+        range 5 60
+        default 5
+        help
+            The main loop's tick while Wi-Fi and Muse are up: token
+            maintenance, the tunnel's state, the heartbeat log. Offline it
+            ticks every 5 seconds regardless, for the Wi-Fi rescan.
+
+    config HOMEHUB_BUTTON_WAKE
+        bool "Wake on the button instead of polling it"
+        default n
+        help
+            While the button is up, its task waits for the pin to go low (an
+            interrupt, and a light-sleep wake source) instead of checking it
+            every 50 ms, so an idle chip isn't woken 20 times a second. While
+            it's down, or a double press is still possible, it's polled as
+            before.
+
     config HOMEHUB_BUTTON_RESET_HOLD_S
         int "Seconds to hold the button to reset setup"
         range 3 60

@@ -38,6 +38,7 @@
 #include "voice_board.h"
 #include "voice_muse_chat.h"
 #include "voice_player.h"
+#include "wifi_mgr.h"
 
 static const char *TAG = "link.voice";
 
@@ -296,6 +297,7 @@ static bool on_press(bool pressed) {
         if (!atomic_load(&s_ready) || voice_board_muted()) return false;
         voice_hatch_refresh();
         if (!muse_hatch_ready()) return false;
+        wifi_mgr_power_hold(true);  // replies come back at full speed
     }
     voice_evt_t evt = pressed ? EVT_PRESS : EVT_RELEASE;
     xQueueSend(s_events, &evt, 0);
@@ -319,6 +321,7 @@ static void voice_task(void *arg) {
         if (!pressed_again(portMAX_DELAY)) continue;
         while (run_turn()) {
         }
+        wifi_mgr_power_hold(false);  // the turn and its reply are over
     }
 }
 

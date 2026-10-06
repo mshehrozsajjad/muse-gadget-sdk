@@ -18,6 +18,9 @@
 #include "stack_monitor.h"
 
 #include "driver/gpio.h"
+#if CONFIG_HOMEHUB_BUTTON_WAKE
+#include "esp_sleep.h"
+#endif
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -40,6 +43,33 @@ static volatile button_hold_cb s_hold_cb = NULL;
 void button_set_hold_cb(button_hold_cb cb) {
     s_hold_cb = cb;
 }
+
+#if CONFIG_HOMEHUB_BUTTON_WAKE
+// The pin going low: wakes the chip from light sleep, and the button task.
+// A level interrupt, since an edge during light sleep can be missed; it's
+// off from here until the task waits again.
+static TaskHandle_t s_button_task;
+
+static void IRAM_ATTR on_button_low(void *arg) {
+    (void)arg;
+    gpio_intr_disable(BTN_GPIO);
+    BaseType_t woken = pdFALSE;
+    vTaskNotifyGiveFromISR(s_button_task, &woken);
+    portYIELD_FROM_ISR(woken);
+}
+
+// Sets up the wake. False if it can't: the task then polls throughout.
+static bool button_wake_init(void) {
+    esp_err_t err = gpio_install_isr_service(0);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) return false;  // already there is fine
+    err = gpio_set_intr_type(BTN_GPIO, GPIO_INTR_LOW_LEVEL);
+    if (err == ESP_OK) err = gpio_isr_handler_add(BTN_GPIO, on_button_low, NULL);
+    if (err == ESP_OK) err = gpio_wakeup_enable(BTN_GPIO, GPIO_INTR_LOW_LEVEL);
+    if (err == ESP_OK) err = esp_sleep_enable_gpio_wakeup();
+    if (err != ESP_OK) ESP_LOGW(TAG, "button wake: %s; polling instead", esp_err_to_name(err));
+    return err == ESP_OK;
+}
+#endif
 #if CONFIG_HOMEHUB_VOICE
 static volatile button_press_cb s_press_cb = NULL;
 
@@ -50,6 +80,10 @@ void button_set_press_cb(button_press_cb cb) {
 
 static void button_task(void *arg) {
     stack_monitor_t stack = STACK_MONITOR_INIT;
+#if CONFIG_HOMEHUB_BUTTON_WAKE
+    s_button_task = xTaskGetCurrentTaskHandle();
+    bool wake = button_wake_init();
+#endif
     bool was_pressed = false;
     int64_t press_start = 0;
     bool fired = false;
@@ -125,6 +159,15 @@ static void button_task(void *arg) {
 
         was_pressed = pressed;
         stack_monitor_poll(&stack);
+#if CONFIG_HOMEHUB_BUTTON_WAKE
+        // Up, with no double press pending: wait for the pin rather than
+        // checking it. Down, poll, to time the hold and catch the release.
+        if (wake && !pressed && click_count == 0) {
+            gpio_intr_enable(BTN_GPIO);
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            continue;
+        }
+#endif
         vTaskDelay(pdMS_TO_TICKS(POLL_MS));
     }
 }
