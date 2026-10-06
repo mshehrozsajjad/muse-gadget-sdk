@@ -33,6 +33,7 @@ typedef enum {
     EPAPER_POSE_THINKING,
     EPAPER_POSE_SPEAKING,
     EPAPER_POSE_ERROR,
+    EPAPER_POSE_SLEEP,
 } epaper_pose_t;
 
 // Sets up the scratch images. False without memory.

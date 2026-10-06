@@ -633,14 +633,18 @@ static epaper_pose_t pose_for(muse_mode_t mode) {
     }
 }
 
-// The character in `mode` at keyframe `frame` (EPAPER_POSE_FRAMES - 1 for the
+// The character in `pose` at keyframe `frame` (EPAPER_POSE_FRAMES - 1 for the
 // settled pose), already black and white.
-static void draw_character(muse_mode_t mode, int frame) {
-    epaper_154_pose_render(s_pose, pose_for(mode), frame);
+static void draw_pose(epaper_pose_t pose, int frame) {
+    epaper_154_pose_render(s_pose, pose, frame);
     for (int y = 0; y < CHARACTER_SIZE; y++) {
         memcpy(s_canvas + (size_t)(CHARACTER_Y + y) * EPD_W + CHARACTER_X,
                s_pose + (size_t)y * CHARACTER_SIZE, CHARACTER_SIZE);
     }
+}
+
+static void draw_character(muse_mode_t mode, int frame) {
+    draw_pose(pose_for(mode), frame);
 }
 
 // Signal bars, 1 to 3, for an RSSI in dBm.
@@ -1017,7 +1021,7 @@ void led_status_show_reset_countdown(int seconds_left) {
     if (changed) xTaskNotifyGive(s_task);
 }
 
-// The sleep screen (the character asleep: boot's first keyframe, eyes shut),
+// The sleep screen (the dedicated lying-down pose, eyes shut),
 // then everything off but the battery hold, held through deep sleep. The
 // panel keeps the picture without power. The panel lock stays taken, so the
 // display task draws nothing more before the chip sleeps.
@@ -1032,7 +1036,7 @@ bool led_status_prepare_deep_sleep(void) {
     memset(s_canvas, 255, CANVAS_BYTES);
     draw_status_bar(0, s_drawn_battery, s_drawn_climate, false);  // Wi-Fi goes off
     draw_title(title, TITLE_Y, TITLE_MAX_SCALE);
-    draw_character(MUSE_MODE_BOOT, 0);
+    draw_pose(EPAPER_POSE_SLEEP, EPAPER_POSE_FRAMES - 1);
     draw_status(SLEEP_LABEL, STATUS_Y, STATUS_SCALE);
     epd_dither();
     xSemaphoreGive(s_lock);

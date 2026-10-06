@@ -19,6 +19,7 @@
 // and ordered shading, drawn straight into one bit, so the panel shows the
 // approved pixels with no grayscale or dithering in between. Keep the
 // geometry identical to the study; its export.py renders the reference.
+// Sleep uses the approved sleep-study-v2 lying-down geometry.
 
 #include "epaper_154_poses.h"
 
@@ -116,6 +117,42 @@ static void draw_backdrop(void) {
     SHAPE(fleck, 255, 0);
     const point fleck2[] = {{94, 44}, {96, 44}, {96, 46}, {94, 46}};
     if (mode == EPAPER_POSE_IDLE || mode == EPAPER_POSE_BOOT) SHAPE(fleck2, 255, 0);
+}
+
+// A low, horizontal sleeping silhouette, with the cheek resting on paws.
+// Drawn in its own geometry so the face is not vertically compressed.
+static void draw_sleep(void) {
+    const point foot_back[]={{88,72},{97,72},{101,75},{101,80},{97,83},{89,82}};
+    const point foot_front[]={{88,87},{98,87},{102,90},{102,94},{98,97},{88,96}};
+    SHAPE(foot_back,255,1);
+    SHAPE(foot_front,255,1);
+    const point body[]={{16,79},{18,68},{23,59},{31,53},{41,50},
+                        {66,50},{78,53},{88,60},{94,70},{96,82},
+                        {94,90},{89,96},{79,99},{35,99},{24,96},{18,89}};
+    SHAPE(body,255,1);
+    for (int y=52;y<99;y++) {
+        for (int x=17;x<96;x++) {
+            if (!inside(x,y,body,(int)(sizeof(body)/sizeof(*body)))) continue;
+            int density = y>92 ? 3 : (x>86 && y>67 ? 2 : 0);
+            if (x>85 && y>87) density=5;
+            if (density && bayer[y&3][x&3]<density) pixel(x,y,0);
+        }
+    }
+    const point face[]={{28,62},{46,60},{54,63},{59,69},{60,79},
+                        {57,86},{50,91},{32,92},{24,89},{20,83},{20,73},{23,66}};
+    SHAPE(face,255,0);
+    // Closed eyelids, with the face nestled low against the front paws.
+    line((point){26,77},(point){29,79},1,0);
+    line((point){29,79},(point){33,79},1,0);
+    line((point){33,79},(point){36,76},1,0);
+    line((point){44,75},(point){47,77},1,0);
+    line((point){47,77},(point){51,77},1,0);
+    line((point){51,77},(point){54,74},1,0);
+    disk(41,85,2,0);
+    const point paw_far[]={{49,88},{55,86},{62,87},{66,91},{65,96},{61,99},{51,99},{47,95}};
+    const point paw_near[]={{20,89},{28,88},{34,90},{37,94},{36,99},{32,102},{21,102},{16,99},{16,94}};
+    SHAPE(paw_far,255,1);
+    SHAPE(paw_near,255,1);
 }
 
 // The tall hood with straighter sides and a gently rounded base, its feet,
@@ -293,7 +330,16 @@ static void draw_marks(void) {
     for (int x = 30; x < 84; x++) {
         if (x % 4 == 0) pixel(x, 104, 0);
     }
-    if (mode == EPAPER_POSE_LISTENING && frame > 0) {
+    if (mode == EPAPER_POSE_SLEEP) {
+        // Ascending, lightly drawn Zs stay clear of the face and hood.
+        const int zs[][3] = {{65,39,4},{75,27,6},{88,12,8}};
+        for (unsigned i=0; i<sizeof(zs)/sizeof(zs[0]); i++) {
+            int x=zs[i][0], y=zs[i][1], r=zs[i][2];
+            line((point){x,y},(point){x+r,y},0,0);
+            line((point){x+r,y},(point){x,y+r},0,0);
+            line((point){x,y+r},(point){x+r,y+r},0,0);
+        }
+    } else if (mode == EPAPER_POSE_LISTENING && frame > 0) {
         line((point){94, 30}, (point){97, 34}, 0, 0);
         line((point){97, 34}, (point){97, 39}, 0, 0);
         line((point){97, 39}, (point){94, 43}, 0, 0);
@@ -346,6 +392,11 @@ void epaper_154_pose_render(uint8_t *out, epaper_pose_t pose, int at_frame) {
 
     memset(s_canvas, 255, W * H);
     draw_backdrop();
+    if (mode == EPAPER_POSE_SLEEP) {
+        draw_sleep();
+        draw_marks();
+        return;
+    }
     memcpy(s_backdrop, s_canvas, W * H);
 
     memset(s_canvas, 255, W * H);
