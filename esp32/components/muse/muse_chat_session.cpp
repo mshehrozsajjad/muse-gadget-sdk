@@ -95,6 +95,10 @@ static const char *TAG = "muse_chat_session";
 #define CHAT_PART (16 * 1024)              /* one body chunk of a long typed message */
 #define MP3_BUF (512 * 1024)
 #define MP3_HOLD (1441 + 4)               /* the largest MP3 frame and the next header */
+/* ElevenLabs sends a little speech, then can pause seconds before the rest, a
+ * sentence at a time: play only once this much is in (or all of it), or the
+ * speaker runs dry between sentences. */
+#define TTS_PREBUFFER_BYTES (3 * MUSE_TTS_MP3_BYTES_PER_S)
 #define MP3_POLL_ROOM (SCRATCH + 8192)     /* stop reading the socket below this much MP3 room */
 #define IN_BYTES (MIC_RATE * 2 * 8)        /* 8 s of mic backlog while connecting */
 #define OUT_BYTES (MIC_RATE * 2 * 2)       /* 2 s of decoded reply */
@@ -238,6 +242,7 @@ struct turn_t {
     /* TTS */
     int tts_msg;             /* message being fetched (or shown, speaker off), or -1 */
     bool silent;             /* speaker off: tts_msg is paced by silence, not fetched */
+    bool tts_playing;        /* ElevenLabs: enough speech is in to start playing it */
     uint8_t *mp3;            /* MP3_BUF */
     size_t mp3_len;
     bool mp3_ended;
@@ -1537,6 +1542,7 @@ static void start_tts(void)
             m.tts = TTS_ACTIVE;
             s_turn.tts_msg = i;
             s_turn.silent = false;
+            s_turn.tts_playing = false;
             m.pcm_start = s_turn.pcm_out;
             m.pcm_frames = 0;
             s_turn.mp3_len = 0;
@@ -1641,6 +1647,12 @@ static void decode(void)
     if (s_turn.silent) {
         pace_silently();
         return;
+    }
+    if (!s_turn.tts_playing) {
+        if (!s_turn.mp3_ended && s_turn.mp3_len < TTS_PREBUFFER_BYTES) {
+            return;
+        }
+        s_turn.tts_playing = true;
     }
     /*
      * minimp3 only takes a frame once it can see the next one's header. Given

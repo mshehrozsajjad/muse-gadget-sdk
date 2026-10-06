@@ -20,7 +20,8 @@
 // a still status screen (Wi-Fi and battery icons, the agent's name, the
 // character and the status text), redrawn only when one of them changes. The
 // character is the SDK's own (avatar/muse_pixel.c), in the pose for the
-// state: one still frame per change, no animation.
+// state, with a short one-time animation on entering some states
+// (epaper_154_animation.h).
 //
 // The board also gates its own power: GPIO17 holds the battery switch on once
 // PWR is released, and GPIO6 (active low) powers the panel. Both are set here,
@@ -98,9 +99,12 @@ static const char *TAG = "link.led";
 // has to show while the button is still held.
 #define STATUS_SETTLE_MS 1500
 #define VOICE_SETTLE_MS  30
-// Fast refreshes leave a faint ghost of the old picture; every so often the
-// status gets a full refresh, which flashes but clears it.
-#define FULL_REFRESH_EVERY 10
+// Fast refreshes leave a faint ghost of the old picture that builds up; a full
+// refresh clears it but flashes. So the clean waits for a calm screen (no
+// voice turn, reply card or animation under way) once this many fast ones
+// have built up, and comes regardless only after the second number.
+#define CLEAN_AFTER_FAST   20
+#define CLEAN_FORCE_FAST   40
 // How often the icons are checked. They change the screen only when a whole
 // bar or battery cell does, and only once past a margin, so that a reading
 // sitting on a threshold doesn't keep refreshing it.
@@ -228,7 +232,7 @@ static bool s_ready;
 // s_lock, and held through a refresh, so that drawing waits only for the
 // dithering, not the time the panel takes.
 static SemaphoreHandle_t s_panel_lock;
-static int s_fast_refreshes = FULL_REFRESH_EVERY;  // the first is full
+static int s_fast_refreshes;  // since the last full refresh
 
 // Guards s_canvas and the drawn-state below.
 static SemaphoreHandle_t s_lock;
@@ -236,6 +240,7 @@ static bool s_image_mode;    // an image replaces the status screen
 static bool s_image_dirty;   // drawn since the last refresh
 static bool s_animation_hidden; // cancel even if an image is shown and cleared between frames
 static bool s_status_drawn;  // the status screen shows s_drawn_*
+static bool s_redraw_pending; // a dropped frame: redraw, but no need to flash
 static const char *s_drawn_label;
 static char s_drawn_title[48];
 static int s_drawn_wifi, s_drawn_battery;
@@ -757,6 +762,7 @@ static void epd_task(void *arg) {
         const char *label = voice_label(s_voice);
         muse_mode_t mode = label ? voice_mode(s_voice) : character_mode(s_state);
         uint32_t generation = s_pose_generation;
+        bool voice_idle = s_voice == LED_VOICE_IDLE;
         bool boot_allowed = s_voice == LED_VOICE_IDLE && s_state != LED_STATE_ERROR &&
                             s_state != LED_STATE_UNPAIRED &&
                             s_state != LED_STATE_PAIRING_CONFIRM_REQUIRED && !reply[0];
@@ -780,7 +786,8 @@ static void epd_task(void *arg) {
         }
         bool frame_due = epaper_animation_prepare(&animation, generation, mode,
                          !s_image_mode && !reply[0], animate, esp_timer_get_time() / 1000);
-        bool redraw = !s_image_mode && (frame_due || !s_status_drawn || label != s_drawn_label
+        bool redraw = !s_image_mode && (frame_due || s_redraw_pending || !s_status_drawn
+                                        || label != s_drawn_label
                                         || strcmp(title, s_drawn_title) != 0
                                         || mode != s_drawn_mode || wifi != s_drawn_wifi
                                         || battery != s_drawn_battery
@@ -788,8 +795,12 @@ static void epd_task(void *arg) {
                                         || strcmp(reply, s_drawn_reply) != 0
                                         || reply_more != s_drawn_reply_more
                                         || reply_compact != s_drawn_reply_compact);
-        // A new screen after an image gets a full refresh too.
-        bool full = !s_status_drawn || s_fast_refreshes >= FULL_REFRESH_EVERY;
+        // The first screen, and the first after an image or a failed refresh,
+        // is full. Otherwise the ghosting is cleaned when the screen is calm.
+        bool animating = animation.last && animation.frame < animation.last;
+        bool calm = voice_idle && !reply[0] && !animating;
+        bool full = !s_status_drawn || s_fast_refreshes >= CLEAN_FORCE_FAST
+                    || (calm && s_fast_refreshes >= CLEAN_AFTER_FAST);
         if (redraw) {
             memset(s_canvas, 255, CANVAS_BYTES);
             draw_status_bar(wifi, battery, climate);
@@ -806,6 +817,7 @@ static void epd_task(void *arg) {
             epd_dither();
             // An image drawn during the refresh clears this again.
             s_status_drawn = true;
+            s_redraw_pending = false;
             s_drawn_label = label;
             memcpy(s_drawn_title, title, sizeof(s_drawn_title));
             s_drawn_wifi = wifi;
@@ -827,7 +839,7 @@ static void epd_task(void *arg) {
         xSemaphoreGive(s_mutex);
         if (redraw && superseded) {
             xSemaphoreTake(s_lock, portMAX_DELAY);
-            s_status_drawn = false;
+            s_redraw_pending = true;
             xSemaphoreGive(s_lock);
             xTaskNotifyGive(s_task);
         } else if (redraw) {

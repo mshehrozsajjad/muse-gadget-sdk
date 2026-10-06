@@ -40,6 +40,9 @@ typedef enum {
     MUSE_TTS_FAILED,    /* the request failed; read what came, if anything */
 } muse_tts_state_t;
 
+/* The MP3 comes at 32 kbps: this many bytes a second of speech. */
+#define MUSE_TTS_MP3_BYTES_PER_S 4000
+
 /* An API key and voice are set (CONFIG_MUSE_TTS_ELEVENLABS_*). */
 bool muse_tts_configured(void);
 
