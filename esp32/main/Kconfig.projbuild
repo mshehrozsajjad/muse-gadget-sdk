@@ -311,6 +311,27 @@ menu "ESP32 Device SDK"
             switch is on, the button keeps its setup role (tap to confirm
             pairing, hold to reset).
 
+    choice HOMEHUB_WIFI_POWER_SAVE
+        prompt "Wi-Fi power saving"
+        default HOMEHUB_WIFI_POWER_SAVE_NONE
+        help
+            How much the radio sleeps while connected. None keeps it listening
+            all the time, for the lowest latency on mains power. Minimum
+            sleeps between the access point's beacons (DTIM), waking for each:
+            much less power, a little added latency on what Muse sends.
+            Maximum sleeps for several beacons at a time: the least power and
+            the most latency.
+
+        config HOMEHUB_WIFI_POWER_SAVE_NONE
+            bool "None"
+
+        config HOMEHUB_WIFI_POWER_SAVE_MIN
+            bool "Minimum (between beacons)"
+
+        config HOMEHUB_WIFI_POWER_SAVE_MAX
+            bool "Maximum (several beacons)"
+    endchoice
+
     config HOMEHUB_BUTTON_RESET_HOLD_S
         int "Seconds to hold the button to reset setup"
         range 3 60

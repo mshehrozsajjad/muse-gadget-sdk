@@ -223,7 +223,13 @@ void wifi_mgr_init(void) {
 #if SOC_WIFI_SUPPORT_5G
     ESP_ERROR_CHECK(esp_wifi_set_band_mode(WIFI_BAND_MODE_AUTO));
 #endif
+#if CONFIG_HOMEHUB_WIFI_POWER_SAVE_MIN
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM));
+#elif CONFIG_HOMEHUB_WIFI_POWER_SAVE_MAX
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MAX_MODEM));
+#else
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+#endif
     s_inited = true;
 
     uint8_t mac[6] = {0};
