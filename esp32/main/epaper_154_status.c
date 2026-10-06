@@ -51,6 +51,7 @@
 #include "epaper_pixels.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_pm.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
@@ -915,8 +916,24 @@ static esp_err_t epd_init(void) {
     return err;
 }
 
+// Lets the chip drop to the crystal clock and light-sleep whenever nothing
+// holds it awake. The panel needs nothing between refreshes, so this board
+// stays this way rather than switching with the screen.
+static void board_power_save(void) {
+#if CONFIG_PM_ENABLE
+    const esp_pm_config_t pm = {
+        .max_freq_mhz = CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ,
+        .min_freq_mhz = CONFIG_XTAL_FREQ,
+        .light_sleep_enable = true,
+    };
+    esp_err_t err = esp_pm_configure(&pm);
+    if (err != ESP_OK) ESP_LOGW(TAG, "power management: %s", esp_err_to_name(err));
+#endif
+}
+
 bool led_status_init(void) {
     board_power_on();
+    board_power_save();
     s_chunk = heap_caps_malloc(EPD_CHUNK_BYTES, MALLOC_CAP_DMA);
     s_canvas = heap_caps_malloc(CANVAS_BYTES, MALLOC_CAP_SPIRAM);
     s_frame = heap_caps_malloc(EPD_FRAME_BYTES, MALLOC_CAP_SPIRAM);

@@ -20,6 +20,11 @@
 // circuit and GPIO46 enables the speaker amplifier, which is on only while
 // the player has audio to play.
 //
+// Between recordings and playback the codec is closed: the ES8311 suspended
+// and the I2S channels stopped, so the chip can drop its clock and light-sleep
+// (a running I2S channel holds it awake). Opening it again takes a few
+// milliseconds, and brings back the volume and mic gain.
+//
 // Pins and settings: Waveshare's V2 audio example
 // (github.com/waveshareteam/ESP32-S3-ePaper-1.54,
 // 02_Example/ESP-IDF/V2/08_Audio_Test: components/codec_board/board_cfg.txt,
@@ -37,6 +42,7 @@
 #include "esp_codec_dev_defaults.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 static const char *TAG = "link.audio";
@@ -67,21 +73,59 @@ static esp_codec_dev_vol_map_t s_volume_map[] = {
 };
 // Samples per read or write: 20 ms.
 #define CHUNK           (AUDIO_RATE / 50)
-// The I2S receive ring: the mic always runs, so it holds the last 90 ms of
-// sound, the tail of the start beep among it, until a recording reads it.
+// The I2S receive ring: while the codec is open, the mic runs and the ring
+// holds the last 90 ms of sound (the tail of the start beep, say) until a
+// recording reads it.
 #define RX_DMA_DESCS    6
 #define RX_DMA_FRAMES   240
 #define RX_RING_FRAMES  (RX_DMA_DESCS * RX_DMA_FRAMES)
 
+static const esp_codec_dev_sample_info_t s_format = {
+    .sample_rate = AUDIO_RATE,
+    .channel = 2,
+    .bits_per_sample = 16,
+};
+
 static esp_codec_dev_handle_t s_speaker, s_mic;
-static bool s_mic_on;
 static int16_t s_stereo[CHUNK * 2];
+
+// Guards the codec's open state and what keeps it open.
+static SemaphoreHandle_t s_audio_lock;
+static bool s_audio_open;
+static bool s_mic_on, s_amp_on;  // recording, playing: either keeps it open
+static int s_volume = 60;
+
+// Opens the codec if it's closed; true if it was already open. Caller holds
+// s_audio_lock.
+static bool audio_open(void) {
+    if (s_audio_open) return true;
+    esp_codec_dev_sample_info_t fs = s_format;
+    if (esp_codec_dev_open(s_speaker, &fs) != ESP_CODEC_DEV_OK
+        || esp_codec_dev_open(s_mic, &fs) != ESP_CODEC_DEV_OK) {
+        ESP_LOGW(TAG, "codec didn't open");
+    }
+    esp_codec_dev_set_in_gain(s_mic, MIC_GAIN_DB);
+    esp_codec_dev_set_out_vol(s_speaker, s_volume);
+    s_audio_open = true;
+    return false;
+}
+
+// Closes the codec once nothing needs it. Caller holds s_audio_lock.
+static void audio_close_if_idle(void) {
+    if (!s_audio_open || s_mic_on || s_amp_on) return;
+    esp_codec_dev_close(s_mic);
+    esp_codec_dev_close(s_speaker);
+    s_audio_open = false;
+}
 
 void voice_board_set_volume(int percent) {
     if (!s_speaker) return;
     if (percent < 0) percent = 0;
     if (percent > 100) percent = 100;
-    esp_codec_dev_set_out_vol(s_speaker, percent);
+    xSemaphoreTake(s_audio_lock, portMAX_DELAY);
+    s_volume = percent;  // closed, it's set when the codec next opens
+    if (s_audio_open) esp_codec_dev_set_out_vol(s_speaker, percent);
+    xSemaphoreGive(s_audio_lock);
 }
 
 // No mute switch on this board.
@@ -91,27 +135,44 @@ bool voice_board_muted(void) { return false; }
 int voice_board_dial_steps(void) { return 0; }
 
 void voice_board_amp(bool on) {
-    static bool s_amp_on;
-    if (on == s_amp_on) return;
+    if (!s_speaker) return;
+    xSemaphoreTake(s_audio_lock, portMAX_DELAY);
+    if (on == s_amp_on) {
+        xSemaphoreGive(s_audio_lock);
+        return;
+    }
     s_amp_on = on;
+    if (on) audio_open();
     gpio_set_level(AUDIO_PIN_AMP, on);
+    if (!on) audio_close_if_idle();
+    xSemaphoreGive(s_audio_lock);
     if (on) vTaskDelay(pdMS_TO_TICKS(AMP_WAKE_MS));
 }
 
 esp_err_t voice_board_mic_start(void) {
     if (!s_mic) return ESP_ERR_INVALID_STATE;
-    // Drop what the ring already holds, so the recording starts now. It
-    // comes back at once, without waiting for new sound.
-    for (int left = RX_RING_FRAMES; left > 0; left -= CHUNK) {
-        int frames = left < CHUNK ? left : CHUNK;
-        esp_codec_dev_read(s_mic, s_stereo, frames * 2 * sizeof(int16_t));
-    }
+    xSemaphoreTake(s_audio_lock, portMAX_DELAY);
+    bool was_open = audio_open();
     s_mic_on = true;
+    xSemaphoreGive(s_audio_lock);
+    if (was_open) {
+        // Drop what the ring already holds, so the recording starts now. It
+        // comes back at once, without waiting for new sound. Freshly opened,
+        // the ring is empty.
+        for (int left = RX_RING_FRAMES; left > 0; left -= CHUNK) {
+            int frames = left < CHUNK ? left : CHUNK;
+            esp_codec_dev_read(s_mic, s_stereo, frames * 2 * sizeof(int16_t));
+        }
+    }
     return ESP_OK;
 }
 
 void voice_board_mic_stop(void) {
+    if (!s_mic) return;
+    xSemaphoreTake(s_audio_lock, portMAX_DELAY);
     s_mic_on = false;
+    audio_close_if_idle();
+    xSemaphoreGive(s_audio_lock);
 }
 
 size_t voice_board_mic_read(int16_t *pcm, size_t frames, int *peak) {
@@ -185,6 +246,8 @@ static esp_err_t start_i2s(i2s_chan_handle_t *tx, i2s_chan_handle_t *rx) {
     };
     if (err == ESP_OK) err = i2s_channel_init_std_mode(*tx, &std);
     if (err == ESP_OK) err = i2s_channel_init_std_mode(*rx, &std);
+    // Running for the codec's first open, which reconfigures them (it stops
+    // them first); closing the codec stops them, and opening it restarts them.
     if (err == ESP_OK) err = i2s_channel_enable(*tx);
     if (err == ESP_OK) err = i2s_channel_enable(*rx);
     return err;
@@ -228,16 +291,14 @@ static esp_err_t start_codec(i2s_chan_handle_t tx, i2s_chan_handle_t rx) {
     s_mic = esp_codec_dev_new(&in_cfg);
     if (!s_speaker || !s_mic) return ESP_ERR_NO_MEM;
 
-    esp_codec_dev_sample_info_t fs = {
-        .sample_rate = AUDIO_RATE,
-        .channel = 2,
-        .bits_per_sample = 16,
-    };
+    // Opened once to check the codec answers and to set the volume curve,
+    // then closed until a recording or playback needs it.
+    esp_codec_dev_sample_info_t fs = s_format;
     if (esp_codec_dev_open(s_speaker, &fs) != ESP_CODEC_DEV_OK
         || esp_codec_dev_open(s_mic, &fs) != ESP_CODEC_DEV_OK) {
         return ESP_FAIL;
     }
-    esp_codec_dev_set_in_gain(s_mic, MIC_GAIN_DB);
+    s_audio_open = true;
     esp_codec_dev_vol_curve_t curve = {
         .vol_map = s_volume_map,
         .count = sizeof(s_volume_map) / sizeof(s_volume_map[0]),
@@ -245,11 +306,14 @@ static esp_err_t start_codec(i2s_chan_handle_t tx, i2s_chan_handle_t rx) {
     if (esp_codec_dev_set_vol_curve(s_speaker, &curve) != ESP_CODEC_DEV_OK) {
         ESP_LOGW(TAG, "volume curve not set; the library's default applies");
     }
+    audio_close_if_idle();
     return ESP_OK;
 }
 
 esp_err_t voice_board_init(void) {
     i2s_chan_handle_t tx, rx;
+    s_audio_lock = xSemaphoreCreateMutex();
+    if (!s_audio_lock) return ESP_ERR_NO_MEM;
     esp_err_t err = power_on();
     if (err == ESP_OK) err = start_i2s(&tx, &rx);
     if (err == ESP_OK) err = start_codec(tx, rx);

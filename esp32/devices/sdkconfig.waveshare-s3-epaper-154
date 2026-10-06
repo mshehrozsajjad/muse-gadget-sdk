@@ -43,6 +43,23 @@ CONFIG_HOMEHUB_BUTTON_RESET_HOLD_S=15
 # On a small battery: the radio sleeps between the access point's beacons.
 CONFIG_HOMEHUB_WIFI_POWER_SAVE_MIN=y
 
+# The CPU drops to the crystal clock and light-sleeps whenever nothing holds
+# it awake (epaper_154_status.c turns it on; Wi-Fi, SPI and I2S hold it up
+# only while they work, and the codec closes between turns). As on the
+# Waveshare AMOLED board: BLE allows it with modem sleep on the main crystal,
+# the CPU stays powered, and pins keep their state (the battery hold, panel
+# power and amp enable). With a USB host attached it stays awake, so the
+# console keeps working.
+CONFIG_PM_ENABLE=y
+CONFIG_FREERTOS_USE_TICKLESS_IDLE=y
+CONFIG_BT_CTRL_MODEM_SLEEP=y
+CONFIG_BT_CTRL_MODEM_SLEEP_MODE_1=y
+CONFIG_BT_CTRL_LPCLK_SEL_MAIN_XTAL=y
+CONFIG_BT_CTRL_MAIN_XTAL_PU_DURING_LIGHT_SLEEP=y
+CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION=y
+# CONFIG_PM_POWER_DOWN_CPU_IN_LIGHT_SLEEP is not set
+# CONFIG_ESP_SLEEP_GPIO_RESET_WORKAROUND is not set
+
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
