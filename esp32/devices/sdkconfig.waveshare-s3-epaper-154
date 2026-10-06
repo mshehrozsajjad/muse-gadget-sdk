@@ -67,6 +67,11 @@ CONFIG_HOMEHUB_WIFI_DEEP_SLEEP_WHEN_IDLE=y
 CONFIG_HOMEHUB_HEARTBEAT_IDLE_S=30
 CONFIG_HOMEHUB_BUTTON_WAKE=y
 
+# An hour unused (and not on a computer's USB): the sleeping character on
+# the e-paper, everything off but the battery hold, and deep sleep until the
+# paddle wakes it.
+CONFIG_HOMEHUB_DEEP_SLEEP_IDLE_MIN=60
+
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y

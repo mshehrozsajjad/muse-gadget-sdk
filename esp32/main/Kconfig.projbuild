@@ -352,6 +352,17 @@ menu "ESP32 Device SDK"
             maintenance, the tunnel's state, the heartbeat log. Offline it
             ticks every 5 seconds regardless, for the Wi-Fi rescan.
 
+    config HOMEHUB_DEEP_SLEEP_IDLE_MIN
+        int "Minutes without use before deep sleep (0: never)"
+        range 0 1440
+        default 0
+        help
+            After this long with no button press or voice turn, and not
+            attached to a computer's USB, the device shows its sleep screen
+            (led_status_prepare_deep_sleep) and deep-sleeps until the button
+            wakes it. Waking restarts it: it rejoins Wi-Fi and Muse as at
+            boot. Needs a display backend that prepares the board for it.
+
     config HOMEHUB_BUTTON_WAKE
         bool "Wake on the button instead of polling it"
         default n

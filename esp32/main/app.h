@@ -22,6 +22,10 @@
 
 void app_run(void);
 
+// Something the user did (a button press, a voice turn): restarts the time
+// to deep sleep (CONFIG_HOMEHUB_DEEP_SLEEP_IDLE_MIN). Any task.
+void app_note_activity(void);
+
 // How joining one of the saved Wi-Fi networks went.
 typedef enum {
     APP_WIFI_JOINED,

@@ -45,6 +45,10 @@ void led_status_set_title(const char *title);
 // The button's reset countdown: seconds left (1 to 5) over whatever is shown,
 // 0 to take it away. Backends without a screen ignore it.
 void led_status_show_reset_countdown(int seconds_left);
+// Before deep sleep: shows the sleep screen (returns once it's up) and gets
+// the board ready to sleep, its rails off and its power held. False if this
+// backend can't, and the device then stays awake.
+bool led_status_prepare_deep_sleep(void);
 
 // Display backends only: the screen size in pixels. Returns false without a
 // display.

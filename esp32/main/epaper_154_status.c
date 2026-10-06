@@ -43,6 +43,7 @@
 
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
+#include "driver/usb_serial_jtag.h"
 #include "battery_154.h"
 #include "climate_154.h"
 #include "epaper_154_icons.h"
@@ -75,6 +76,7 @@ static const char *TAG = "link.led";
 // Low powers the audio circuit, and the SHTC3 with it: the sensor doesn't
 // answer until this is on (voice_board_waveshare_epaper_154.c drives it too).
 #define BOARD_PIN_AUDIO_POWER 42
+#define BOARD_PIN_AMP         46  // high enables the speaker amplifier
 
 #define EPD_HOST        SPI2_HOST
 #define EPD_PIN_SCLK    12
@@ -160,6 +162,13 @@ static const reply_layout_t s_layout_compact = {
 // Switch the battery hold, the panel and the audio rail (for the sensor) on,
 // and keep the first two through light sleep.
 static void board_power_on(void) {
+    // Deep sleep leaves these held (led_status_prepare_deep_sleep); a held
+    // pin ignores new levels until released.
+    gpio_deep_sleep_hold_dis();
+    gpio_hold_dis(BOARD_PIN_VBAT_HOLD);
+    gpio_hold_dis(BOARD_PIN_EPD_POWER);
+    gpio_hold_dis(BOARD_PIN_AUDIO_POWER);
+    gpio_hold_dis(BOARD_PIN_AMP);
     const gpio_config_t out = {
         .pin_bit_mask = 1ULL << BOARD_PIN_VBAT_HOLD | 1ULL << BOARD_PIN_EPD_POWER
                         | 1ULL << BOARD_PIN_AUDIO_POWER,
@@ -247,6 +256,7 @@ static bool s_redraw_pending; // a dropped frame: redraw, but no need to flash
 static const char *s_drawn_label;
 static char s_drawn_title[48];
 static int s_drawn_wifi, s_drawn_battery;
+static bool s_drawn_usb;
 
 // Temperature and humidity as shown, whole degrees and percent; valid false
 // when the sensor doesn't answer, which leaves them off the bar.
@@ -515,6 +525,8 @@ static void draw_status(const char *text, int y, int scale) {
     }
 }
 
+#define SLEEP_LABEL "Press to wake"
+
 // The status text for the reset countdown, `left` seconds from 1 to 5.
 static const char *countdown_label(int left) {
     static const char *const labels[] = {
@@ -714,10 +726,14 @@ static void draw_climate(climate_t climate) {
     draw_run_halves(rest, nr, x + nt * adv + degree_w, y, halves);
 }
 
-static void draw_status_bar(int wifi, int battery, climate_t climate) {
+// `usb`: plugged into a computer. A wall charger or power bank can't be told
+// apart from the battery: nothing wires the charger or USB power to a pin.
+static void draw_status_bar(int wifi, int battery, climate_t climate, bool usb) {
     icon_wifi(s_canvas, EPD_W, BAR_MARGIN, BAR_Y, wifi);
     draw_climate(climate);
-    icon_battery(s_canvas, EPD_W, EPD_W - BAR_MARGIN - ICON_BATTERY_W, BAR_Y + 1, battery);
+    const int battery_x = EPD_W - BAR_MARGIN - ICON_BATTERY_W;
+    icon_battery(s_canvas, EPD_W, battery_x, BAR_Y + 1, battery);
+    if (usb) icon_bolt(s_canvas, EPD_W, battery_x - ICON_BOLT_W - 2, BAR_Y + 1);
 }
 
 static void epd_task(void *arg) {
@@ -763,6 +779,7 @@ static void epd_task(void *arg) {
         wifi = wifi_bars(wifi);
         battery = battery_cells(battery);
         climate = climate_now(climate);
+        bool usb = usb_serial_jtag_is_connected();
         char title[sizeof(s_title)];
         static char reply[REPLY_MAX];
         xSemaphoreTake(s_mutex, portMAX_DELAY);
@@ -816,7 +833,7 @@ static void epd_task(void *arg) {
                                         || label != s_drawn_label
                                         || strcmp(title, s_drawn_title) != 0
                                         || mode != s_drawn_mode || wifi != s_drawn_wifi
-                                        || battery != s_drawn_battery
+                                        || battery != s_drawn_battery || usb != s_drawn_usb
                                         || memcmp(&climate, &s_drawn_climate, sizeof(climate)) != 0
                                         || strcmp(reply, s_drawn_reply) != 0
                                         || reply_more != s_drawn_reply_more
@@ -829,7 +846,7 @@ static void epd_task(void *arg) {
                     || (calm && s_fast_refreshes >= CLEAN_AFTER_FAST);
         if (redraw) {
             memset(s_canvas, 255, CANVAS_BYTES);
-            draw_status_bar(wifi, battery, climate);
+            draw_status_bar(wifi, battery, climate, usb);
 #if CONFIG_HOMEHUB_VOICE
             if (reply[0]) {
                 draw_reply(reply, reply_more, reply_compact ? &s_layout_compact : &s_layout_normal);
@@ -849,6 +866,7 @@ static void epd_task(void *arg) {
             memcpy(s_drawn_title, title, sizeof(s_drawn_title));
             s_drawn_wifi = wifi;
             s_drawn_battery = battery;
+            s_drawn_usb = usb;
             s_drawn_climate = climate;
             s_drawn_mode = mode;
             memcpy(s_drawn_reply, reply, sizeof(s_drawn_reply));
@@ -997,6 +1015,41 @@ void led_status_show_reset_countdown(int seconds_left) {
     }
     xSemaphoreGive(s_mutex);
     if (changed) xTaskNotifyGive(s_task);
+}
+
+// The sleep screen (the character asleep: boot's first keyframe, eyes shut),
+// then everything off but the battery hold, held through deep sleep. The
+// panel keeps the picture without power. The panel lock stays taken, so the
+// display task draws nothing more before the chip sleeps.
+bool led_status_prepare_deep_sleep(void) {
+    if (!s_ready) return false;
+    xSemaphoreTake(s_panel_lock, portMAX_DELAY);
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    char title[sizeof(s_title)];
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    memcpy(title, s_title, sizeof(title));
+    xSemaphoreGive(s_mutex);
+    memset(s_canvas, 255, CANVAS_BYTES);
+    draw_status_bar(0, s_drawn_battery, s_drawn_climate, false);  // Wi-Fi goes off
+    draw_title(title, TITLE_Y, TITLE_MAX_SCALE);
+    draw_character(MUSE_MODE_BOOT, 0);
+    draw_status(SLEEP_LABEL, STATUS_Y, STATUS_SCALE);
+    epd_dither();
+    xSemaphoreGive(s_lock);
+    esp_err_t err = epd_update(true);  // a clean picture to sleep on
+    if (err != ESP_OK) ESP_LOGW(TAG, "sleep screen not drawn: %s", esp_err_to_name(err));
+
+    gpio_set_level(BOARD_PIN_AMP, 0);
+    gpio_set_level(BOARD_PIN_AUDIO_POWER, 1);  // codec, mic and SHTC3 off
+    gpio_hold_dis(BOARD_PIN_EPD_POWER);
+    gpio_set_level(BOARD_PIN_EPD_POWER, 1);    // panel off; the picture stays
+    gpio_hold_en(BOARD_PIN_AMP);
+    gpio_hold_en(BOARD_PIN_AUDIO_POWER);
+    gpio_hold_en(BOARD_PIN_EPD_POWER);
+    gpio_hold_en(BOARD_PIN_VBAT_HOLD);         // or the board switches itself off
+    gpio_deep_sleep_hold_en();
+    ESP_LOGI(TAG, "sleep screen up; board ready for deep sleep");
+    return true;
 }
 
 bool led_status_display_info(int *width, int *height) {

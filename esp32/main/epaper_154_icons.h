@@ -29,6 +29,8 @@
 #define ICON_BATTERY_W  22
 #define ICON_BATTERY_H  11
 #define ICON_BATTERY_SEGMENTS 4
+#define ICON_BOLT_W     7
+#define ICON_BOLT_H     11
 
 static inline void icon_dot(uint8_t *canvas, int stride, int x, int y) {
     canvas[(size_t)y * stride + x] = 0;
@@ -81,6 +83,18 @@ static inline void icon_battery(uint8_t *canvas, int stride, int x, int y, int s
     for (int s = 0; s < segments && s < ICON_BATTERY_SEGMENTS; s++) {
         for (int py = y + 2; py < y + ICON_BATTERY_H - 2; py++) {
             for (int px = 0; px < 3; px++) icon_dot(canvas, stride, x + 2 + s * 4 + px, py);
+        }
+    }
+}
+
+// A lightning bolt: on USB power from a computer (beside the battery).
+static inline void icon_bolt(uint8_t *canvas, int stride, int x, int y) {
+    static const uint8_t rows[ICON_BOLT_H] = {
+        0x0C, 0x18, 0x18, 0x30, 0x3E, 0x7C, 0x0C, 0x18, 0x18, 0x30, 0x20,
+    };
+    for (int r = 0; r < ICON_BOLT_H; r++) {
+        for (int c = 0; c < ICON_BOLT_W; c++) {
+            if (rows[r] >> (ICON_BOLT_W - 1 - c) & 1) icon_dot(canvas, stride, x + c, y + r);
         }
     }
 }

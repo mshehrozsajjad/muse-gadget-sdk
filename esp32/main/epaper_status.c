@@ -573,6 +573,11 @@ void led_status_show_reset_countdown(int seconds_left) {
     (void)seconds_left;
 }
 
+// No sleep screen or board preparation here: the device stays awake.
+bool led_status_prepare_deep_sleep(void) {
+    return false;
+}
+
 bool led_status_display_info(int *width, int *height) {
     if (!s_ready) return false;
     *width = EPD_W;

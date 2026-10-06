@@ -69,6 +69,8 @@ set(GADGET_REQUIRES
     # is loaded, so this is unconditional; unused code is not linked.
     esp_driver_i2s
     esp_driver_pcnt
+    # The 1.54 inch e-paper's USB bolt (usb_serial_jtag_is_connected).
+    esp_driver_usb_serial_jtag
 )
 
 # E-paper has its own status screen in place of led_status.c.

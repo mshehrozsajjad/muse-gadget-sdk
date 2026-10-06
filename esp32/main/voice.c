@@ -16,6 +16,8 @@
 
 #include "voice.h"
 
+#include "app.h"
+
 #include <math.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -298,6 +300,7 @@ static bool on_press(bool pressed) {
         voice_hatch_refresh();
         if (!muse_hatch_ready()) return false;
         wifi_mgr_power_hold(true);  // replies come back at full speed
+        app_note_activity();
     }
     voice_evt_t evt = pressed ? EVT_PRESS : EVT_RELEASE;
     xQueueSend(s_events, &evt, 0);
@@ -322,6 +325,7 @@ static void voice_task(void *arg) {
         while (run_turn()) {
         }
         wifi_mgr_power_hold(false);  // the turn and its reply are over
+        app_note_activity();          // idle time counts from the reply's end
     }
 }
 

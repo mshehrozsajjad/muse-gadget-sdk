@@ -34,8 +34,6 @@
 #include "freertos/idf_additions.h"
 #endif
 #include "esp_timer.h"
-#include "esp_system.h"
-#include "esp_attr.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 #include "esp_efuse.h"
@@ -56,6 +54,11 @@
 #include "noise_tunnel.h"
 #include "led_status.h"
 #include "button.h"
+#include "driver/rtc_io.h"
+#include "driver/usb_serial_jtag.h"
+#include "esp_pm.h"
+#include "esp_sleep.h"
+#include "esp_wifi.h"
 #include "tunnel_netif.h"
 #include "net_discovery.h"
 #include "ota.h"
@@ -2101,6 +2104,65 @@ static void open_setup_window(const char *reason) {
     enter_advertising_state(reason);
 }
 
+// ---- Deep sleep when unused --------------------------------------------------
+
+static atomic_llong s_last_activity_us;
+
+void app_note_activity(void) {
+    atomic_store(&s_last_activity_us, esp_timer_get_time());
+}
+
+#if CONFIG_HOMEHUB_DEEP_SLEEP_IDLE_MIN > 0
+// Automatic light sleep on or off; the clock range stays as the board set it.
+static void set_light_sleep(bool on) {
+#if CONFIG_PM_ENABLE
+    esp_pm_config_t pm;
+    if (esp_pm_get_configuration(&pm) != ESP_OK) return;
+    pm.light_sleep_enable = on;
+    esp_pm_configure(&pm);
+#else
+    (void)on;
+#endif
+}
+
+// On the heartbeat: unused for the configured time, and not on a computer's
+// USB (which powers it anyway, and whose console sleep would cut off), the
+// board shows its sleep screen and deep-sleeps until the button wakes it.
+// Waking is a restart.
+static void sleep_if_unused(void) {
+    if (usb_serial_jtag_is_connected()) {
+        app_note_activity();  // the idle time starts when it's unplugged
+        return;
+    }
+    int64_t idle_us = esp_timer_get_time() - atomic_load(&s_last_activity_us);
+    if (idle_us < CONFIG_HOMEHUB_DEEP_SLEEP_IDLE_MIN * 60LL * 1000000LL) return;
+    if (!operation_gate_take(0, "deep sleep")) return;  // not in the middle of setup
+    ESP_LOGI(TAG, "unused for %d min: deep sleep until the button", CONFIG_HOMEHUB_DEEP_SLEEP_IDLE_MIN);
+    // Each light sleep arms a wake-up timer, and one armed on the way down
+    // woke the chip straight out of deep sleep: no more light sleep from here.
+    set_light_sleep(false);
+    if (!led_status_prepare_deep_sleep()) {
+        set_light_sleep(true);
+        operation_gate_give();
+        app_note_activity();  // can't: try again after another idle spell
+        return;
+    }
+    esp_wifi_stop();
+    // The button, as in Waveshare's sleep example for the ePaper-1.54: a press
+    // pulls it low. Asleep, only the RTC pull-up holds it high, so the RTC
+    // peripherals stay powered for it; without it the pin drifts low and
+    // wakes the chip at once.
+    const gpio_num_t button = (gpio_num_t)CONFIG_HOMEHUB_BUTTON_GPIO;
+    rtc_gpio_pullup_en(button);
+    rtc_gpio_pulldown_dis(button);
+    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
+    // Last, with nothing in between to arm anything else: the button only.
+    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+    esp_sleep_enable_ext1_wakeup_io(1ULL << button, ESP_EXT1_WAKEUP_ANY_LOW);
+    esp_deep_sleep_start();
+}
+#endif
+
 #if !CONFIG_MUSE_ENABLED
 // ---- Offline: looking for any saved network ---------------------------------
 //
@@ -2167,6 +2229,7 @@ static void rescan_saved_networks(void) {
 #endif
 
 static void on_button_short_press(void) {
+    app_note_activity();
     factory_test_on_button_press();
 
     if (link_pairing_confirmation_required()) {
@@ -2198,6 +2261,7 @@ static void on_button_short_press(void) {
 }
 
 static void on_button_double_press(void) {
+    app_note_activity();
     ESP_LOGI(TAG, "button double-press ignored");
 }
 
@@ -2550,6 +2614,14 @@ void app_run(void) {
         abort();
     }
 
+    app_note_activity();  // a boot, or the press that woke it
+#if CONFIG_HOMEHUB_DEEP_SLEEP_IDLE_MIN > 0
+    if (esp_sleep_get_wakeup_causes() & (1UL << ESP_SLEEP_WAKEUP_EXT1)) {
+        ESP_LOGI(TAG, "woke from deep sleep: button (pins 0x%llx)",
+                 (unsigned long long)esp_sleep_get_ext1_wakeup_status());
+        rtc_gpio_deinit((gpio_num_t)CONFIG_HOMEHUB_BUTTON_GPIO);  // back to a plain GPIO
+    }
+#endif
     config_store_init();
     wifi_known_init();
     if (CONFIG_HOMEHUB_WIFI_SEED_SSID[0]) {
@@ -2905,6 +2977,9 @@ void app_run(void) {
         // Wi-Fi rescan.
         bool settled = wifi_mgr_is_connected() && noise_ctrl_is_connected();
         wifi_mgr_power_check(settled);
+#if CONFIG_HOMEHUB_DEEP_SLEEP_IDLE_MIN > 0
+        sleep_if_unused();
+#endif
         vTaskDelay(pdMS_TO_TICKS(settled ? CONFIG_HOMEHUB_HEARTBEAT_IDLE_S * 1000 : 5000));
 #endif
     }
