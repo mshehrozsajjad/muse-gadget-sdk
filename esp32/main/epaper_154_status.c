@@ -19,9 +19,9 @@
 // Like epaper_status.c for the reTerminal, it replaces led_status.c and shows
 // a still status screen (Wi-Fi and battery icons, the agent's name, the
 // character and the status text), redrawn only when one of them changes. The
-// character is the SDK's own (avatar/muse_pixel.c), in the pose for the
-// state, with a short one-time animation on entering some states
-// (epaper_154_animation.h).
+// character is Yolk's own black and white drawing (epaper_154_poses.c), in the
+// pose for the state, with a short one-time animation on entering boot and
+// listening (epaper_154_animation.h).
 //
 // The board also gates its own power: GPIO17 holds the battery switch on once
 // PWR is released, and GPIO6 (active low) powers the panel. Both are set here,
@@ -47,6 +47,7 @@
 #include "climate_154.h"
 #include "epaper_154_icons.h"
 #include "epaper_154_animation.h"
+#include "epaper_154_poses.h"
 #include "epaper_pixels.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -225,6 +226,7 @@ static uint8_t *s_chunk;     // DMA buffer for SPI writes
 static uint8_t *s_canvas;    // what is being drawn, 8-bit gray
 static uint8_t *s_frame;     // s_canvas dithered, about to be shown
 static uint8_t *s_shown;     // what the panel shows, for fast refreshes
+static uint8_t *s_pose;      // the character, drawn before it goes on the canvas
 static int16_t *s_err;       // dithering error rows
 static bool s_ready;
 
@@ -606,21 +608,25 @@ static muse_mode_t character_mode(led_state_t state) {
     }
 }
 
-// The character in `mode`, still, in gray, with its black background as
-// paper. The renderer eases its colours from one mode to the next over
-// time, so a few frames settle the palette while holding the chosen key pose.
-static void draw_character(muse_mode_t mode, float mode_t) {
-    static uint16_t row[CHARACTER_SIZE];
-    muse_pose_t pose = {.mode = mode};
-    for (int i = 0; i < 10; i++) {
-        pose.t += 0.2f;
-        pose.mode_t = mode_t;
-        muse_pixel_render(&pose);
+// The drawing's pose for a character mode.
+static epaper_pose_t pose_for(muse_mode_t mode) {
+    switch (mode) {
+        case MUSE_MODE_BOOT:      return EPAPER_POSE_BOOT;
+        case MUSE_MODE_LISTENING: return EPAPER_POSE_LISTENING;
+        case MUSE_MODE_THINKING:  return EPAPER_POSE_THINKING;
+        case MUSE_MODE_SPEAKING:  return EPAPER_POSE_SPEAKING;
+        case MUSE_MODE_ERROR:     return EPAPER_POSE_ERROR;
+        default:                  return EPAPER_POSE_IDLE;
     }
+}
+
+// The character in `mode` at keyframe `frame` (EPAPER_POSE_FRAMES - 1 for the
+// settled pose), already black and white.
+static void draw_character(muse_mode_t mode, int frame) {
+    epaper_154_pose_render(s_pose, pose_for(mode), frame);
     for (int y = 0; y < CHARACTER_SIZE; y++) {
-        muse_pixel_scale(row, CHARACTER_SIZE, 0, CHARACTER_SIZE - 1, y, y);
-        uint8_t *line = s_canvas + (size_t)(CHARACTER_Y + y) * EPD_W + CHARACTER_X;
-        for (int x = 0; x < CHARACTER_SIZE; x++) line[x] = row[x] == 0 ? 255 : luma565(row[x]);
+        memcpy(s_canvas + (size_t)(CHARACTER_Y + y) * EPD_W + CHARACTER_X,
+               s_pose + (size_t)y * CHARACTER_SIZE, CHARACTER_SIZE);
     }
 }
 
@@ -830,7 +836,8 @@ static void epd_task(void *arg) {
 #endif
             {
                 draw_title(title, TITLE_Y, TITLE_MAX_SCALE);
-                draw_character(mode, epaper_animation_pose_time(&animation));
+                // The entry animation's keyframe, or the settled pose.
+                draw_character(mode, animation.last ? animation.frame : EPAPER_POSE_FRAMES - 1);
                 draw_status(label, STATUS_Y, STATUS_SCALE);
             }
             epd_dither();
@@ -910,18 +917,18 @@ static esp_err_t epd_init(void) {
 
 bool led_status_init(void) {
     board_power_on();
-    muse_pixel_set_size(CHARACTER_SIZE);
     s_chunk = heap_caps_malloc(EPD_CHUNK_BYTES, MALLOC_CAP_DMA);
     s_canvas = heap_caps_malloc(CANVAS_BYTES, MALLOC_CAP_SPIRAM);
     s_frame = heap_caps_malloc(EPD_FRAME_BYTES, MALLOC_CAP_SPIRAM);
     // What the panel shows at boot is unknown; the first refresh is full.
     s_shown = heap_caps_calloc(1, EPD_FRAME_BYTES, MALLOC_CAP_SPIRAM);
+    s_pose = heap_caps_malloc((size_t)CHARACTER_SIZE * CHARACTER_SIZE, MALLOC_CAP_SPIRAM);
     s_err = heap_caps_malloc(2 * (EPD_W + 2) * sizeof(int16_t), MALLOC_CAP_INTERNAL);
     s_panel_lock = xSemaphoreCreateMutex();
     s_lock = xSemaphoreCreateMutex();
     s_mutex = xSemaphoreCreateMutex();
-    if (!(s_chunk && s_canvas && s_frame && s_shown && s_err && s_panel_lock && s_lock
-          && s_mutex)) {
+    if (!(s_chunk && s_canvas && s_frame && s_shown && s_pose && s_err && s_panel_lock && s_lock
+          && s_mutex && epaper_154_poses_init())) {
         ESP_LOGE(TAG, "e-paper buffer alloc failed");
         return false;
     }
@@ -932,7 +939,8 @@ bool led_status_init(void) {
         ESP_LOGE(TAG, "1.54 inch e-paper init failed: %s", esp_err_to_name(err));
         return false;
     }
-    if (xTaskCreate(epd_task, "epd", 3072, NULL, 2, &s_task) != pdPASS) {
+    // 4 KB: the stack fell to under 1 KB free with the poses and reply card.
+    if (xTaskCreate(epd_task, "epd", 4096, NULL, 2, &s_task) != pdPASS) {
         ESP_LOGE(TAG, "failed to start the e-paper task");
         return false;
     }
