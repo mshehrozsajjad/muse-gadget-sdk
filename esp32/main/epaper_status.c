@@ -583,6 +583,14 @@ bool led_status_dismiss_card(void) {
     return false;
 }
 
+// No menu here: nothing reads a dial on these boards.
+void led_status_show_menu(const led_menu_row_t *rows, int count, int selected, bool adjusting) {
+    (void)rows;
+    (void)count;
+    (void)selected;
+    (void)adjusting;
+}
+
 // No sleep screen or board preparation here: the device stays awake.
 bool led_status_prepare_deep_sleep(void) {
     return false;

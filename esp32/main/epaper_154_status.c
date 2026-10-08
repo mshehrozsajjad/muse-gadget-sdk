@@ -151,6 +151,12 @@ static const char *TAG = "link.led";
 #define VOLUME_SHOW_MS   2500
 #define VOLUME_STEPS     21   // 0 to 100 % in 5 % steps
 
+// Menu: the status bar, then a row per item in the status text's size, the
+// selected one white on black.
+#define MENU_Y           22
+#define MENU_ROW_H       22
+#define MENU_MARGIN      6
+
 // Switch the battery hold, the panel and the audio rail (for the sensor) on,
 // and keep the first two through light sleep.
 static void board_power_on(void) {
@@ -260,6 +266,7 @@ static climate_t s_drawn_climate;
 static muse_mode_t s_drawn_mode;
 static char s_drawn_reply[REPLY_MAX];
 static int s_drawn_reply_page;
+static uint32_t s_drawn_menu_version;
 
 // Requested by led_status_set_state(), _set_title() and _set_voice();
 // guarded by s_mutex. While a voice turn runs, its state stands in for the
@@ -272,6 +279,11 @@ static uint32_t s_pose_generation; // captures rapid leave/re-enter during a pan
 static int s_reset_left;         // the button's reset countdown, 0 for none
 static int s_volume_shown;       // the volume last set, 0 to 100
 static int64_t s_volume_until;   // when its label goes, 0 when it isn't shown
+static led_menu_row_t s_menu[LED_MENU_ROWS_MAX];
+static int s_menu_count;         // rows shown, 0 when the menu is closed
+static int s_menu_selected;
+static bool s_menu_adjusting;
+static uint32_t s_menu_version;  // bumped by each change, to know when to redraw
 static char s_reply[REPLY_MAX];  // the reply card's wrapped lines, "" for none
 static int s_reply_page;         // the card's page shown, from 0
 static bool s_reply_sticky;      // a note: stays until dismissed, no timeout
@@ -449,10 +461,11 @@ static const char *status_label(led_state_t state) {
     return "";
 }
 
-// Draw the first `n` bytes of `text` in black, each font pixel `halves` / 2
-// screen pixels wide (4 for 2x, 3 for 1.5x, where font pixels alternate
-// between 2 and 1), from (x0, y). Bytes outside printable ASCII show as '?'.
-static void draw_run_halves(const char *text, int n, int x0, int y, int halves) {
+// Draw the first `n` bytes of `text` in `ink` (0 black, 255 white), each font
+// pixel `halves` / 2 screen pixels wide (4 for 2x, 3 for 1.5x, where font
+// pixels alternate between 2 and 1), from (x0, y). Bytes outside printable
+// ASCII show as '?'.
+static void draw_run_ink(const char *text, int n, int x0, int y, int halves, uint8_t ink) {
     const int adv = PIXEL_FONT_WIDTH + 1;
     for (int i = 0; i < n; i++) {
         unsigned char ch = (unsigned char)text[i];
@@ -465,11 +478,16 @@ static void draw_run_halves(const char *text, int n, int x0, int y, int halves) 
                 if (!(glyph[gx] >> gy & 1)) continue;
                 int py = y + gy * halves / 2, ph = y + (gy + 1) * halves / 2 - py;
                 for (int r = 0; r < ph; r++) {
-                    memset(s_canvas + (size_t)(py + r) * EPD_W + px, 0, pw);
+                    memset(s_canvas + (size_t)(py + r) * EPD_W + px, ink, pw);
                 }
             }
         }
     }
+}
+
+// As draw_run_ink, in black.
+static void draw_run_halves(const char *text, int n, int x0, int y, int halves) {
+    draw_run_ink(text, n, x0, y, halves, 0);
 }
 
 // As draw_run_halves, at a whole pixel size `scale`.
@@ -631,6 +649,32 @@ static void draw_reply(const char *text, int page) {
     if (pages > 1) draw_scrollbar(page, pages);
 }
 #endif
+
+// The menu's rows: name on the left, value on the right, the selected row
+// inverted, and its value in <angle brackets> while it's being adjusted.
+static void draw_menu(const led_menu_row_t *rows, int count, int selected, bool adjusting) {
+    const int adv = (PIXEL_FONT_WIDTH + 1) * STATUS_SCALE;
+    const int text_dy = (MENU_ROW_H - PIXEL_FONT_HEIGHT * STATUS_SCALE) / 2;
+    for (int i = 0; i < count; i++) {
+        int y = MENU_Y + i * MENU_ROW_H;
+        uint8_t ink = 0;
+        if (i == selected) {
+            memset(s_canvas + (size_t)y * EPD_W, 0, (size_t)MENU_ROW_H * EPD_W);
+            ink = 255;
+        }
+        char value[sizeof(rows[i].value) + 2];
+        snprintf(value, sizeof(value), i == selected && adjusting ? "<%s>" : "%s", rows[i].value);
+        int nv = (int)strlen(value);
+        int nl = (int)strlen(rows[i].label);
+        int max_label = (EPD_W - 2 * MENU_MARGIN) / adv - (nv ? nv + 1 : 0);
+        draw_run_ink(rows[i].label, nl < max_label ? nl : max_label, MENU_MARGIN, y + text_dy,
+                     STATUS_SCALE * 2, ink);
+        if (nv) {
+            int x = EPD_W - MENU_MARGIN - (nv * adv - STATUS_SCALE);
+            draw_run_ink(value, nv, x, y + text_dy, STATUS_SCALE * 2, ink);
+        }
+    }
+}
 
 // The character's pose for a connection state.
 static muse_mode_t character_mode(led_state_t state) {
@@ -844,12 +888,19 @@ static void epd_task(void *arg) {
         uint32_t generation = s_pose_generation;
         bool voice_idle = s_voice == LED_VOICE_IDLE;
         int reset_left = s_reset_left;
+        static led_menu_row_t menu[LED_MENU_ROWS_MAX];
+        int menu_count = s_menu_count;
+        int menu_selected = s_menu_selected;
+        bool menu_adjusting = s_menu_adjusting;
+        uint32_t menu_version = s_menu_version;
+        memcpy(menu, s_menu, sizeof(menu));
         if (s_volume_until && esp_timer_get_time() >= s_volume_until) s_volume_until = 0;
         volume_until = s_volume_until;
         int volume = s_volume_shown;
         bool boot_allowed = !reset_left && s_voice == LED_VOICE_IDLE && s_state != LED_STATE_ERROR &&
                             s_state != LED_STATE_UNPAIRED &&
-                            s_state != LED_STATE_PAIRING_CONFIRM_REQUIRED && !reply[0];
+                            s_state != LED_STATE_PAIRING_CONFIRM_REQUIRED && !reply[0] &&
+                            !menu_count;
         if (!label) label = status_label(s_state);
         memcpy(title, s_title, sizeof(title));
         xSemaphoreGive(s_mutex);
@@ -858,6 +909,8 @@ static void epd_task(void *arg) {
             label = countdown_label(reset_left);
             mode = MUSE_MODE_ERROR;
             reply[0] = '\0';
+        } else if (menu_count) {
+            reply[0] = '\0';  // under the menu until it closes
         } else if (volume_until) {
             label = volume_label(volume);  // the pose stays as it is
         }
@@ -877,7 +930,8 @@ static void epd_task(void *arg) {
             s_animation_hidden = false;
         }
         bool frame_due = epaper_animation_prepare(&animation, generation, mode,
-                         !s_image_mode && !reply[0], animate, esp_timer_get_time() / 1000);
+                         !s_image_mode && !reply[0] && !menu_count, animate,
+                         esp_timer_get_time() / 1000);
         bool redraw = !s_image_mode && (frame_due || s_redraw_pending || !s_status_drawn
                                         || label != s_drawn_label
                                         || strcmp(title, s_drawn_title) != 0
@@ -885,16 +939,21 @@ static void epd_task(void *arg) {
                                         || battery != s_drawn_battery || usb != s_drawn_usb
                                         || memcmp(&climate, &s_drawn_climate, sizeof(climate)) != 0
                                         || strcmp(reply, s_drawn_reply) != 0
-                                        || reply_page != s_drawn_reply_page);
+                                        || reply_page != s_drawn_reply_page
+                                        || menu_version != s_drawn_menu_version);
         // The first screen, and the first after an image or a failed refresh,
         // is full. Otherwise the ghosting is cleaned when the screen is calm.
         bool animating = animation.last && animation.frame < animation.last;
-        bool calm = voice_idle && !reply[0] && !animating && !reset_left && !volume_until;
+        bool calm = voice_idle && !reply[0] && !animating && !reset_left && !volume_until
+                    && !menu_count;
         bool full = !s_status_drawn || s_fast_refreshes >= CLEAN_FORCE_FAST
                     || (calm && s_fast_refreshes >= CLEAN_AFTER_FAST);
         if (redraw) {
             memset(s_canvas, 255, CANVAS_BYTES);
             draw_status_bar(wifi, battery, climate, usb);
+            if (menu_count && !reset_left) {
+                draw_menu(menu, menu_count, menu_selected, menu_adjusting);
+            } else
 #if CONFIG_HOMEHUB_VOICE
             if (reply[0]) {
                 draw_reply(reply, reply_page);
@@ -919,6 +978,7 @@ static void epd_task(void *arg) {
             s_drawn_mode = mode;
             memcpy(s_drawn_reply, reply, sizeof(s_drawn_reply));
             s_drawn_reply_page = reply_page;
+            s_drawn_menu_version = menu_version;
         }
         xSemaphoreGive(s_lock);
         // Recheck after rendering: never start a refresh for a superseded
@@ -1173,6 +1233,26 @@ bool led_status_scroll_card(int pages) {
     xSemaphoreGive(s_mutex);
     if (changed) xTaskNotifyGive(s_task);
     return shown;
+}
+
+void led_status_show_menu(const led_menu_row_t *rows, int count, int selected, bool adjusting) {
+    if (!s_ready) return;
+    if (!rows || count < 0) count = 0;
+    if (count > LED_MENU_ROWS_MAX) count = LED_MENU_ROWS_MAX;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool changed = count != s_menu_count || selected != s_menu_selected
+                   || adjusting != s_menu_adjusting
+                   || (count && memcmp(rows, s_menu, count * sizeof(*rows)) != 0);
+    if (count) memcpy(s_menu, rows, count * sizeof(*rows));
+    s_menu_count = count;
+    s_menu_selected = selected;
+    s_menu_adjusting = adjusting;
+    if (changed) {
+        s_menu_version++;
+        s_voice_changed = true;  // draw it at once, as a voice change would
+    }
+    xSemaphoreGive(s_mutex);
+    if (changed) xTaskNotifyGive(s_task);
 }
 
 bool led_status_dismiss_card(void) {

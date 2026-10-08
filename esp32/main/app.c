@@ -71,6 +71,9 @@
 #if CONFIG_HOMEHUB_DIAL
 #include "dial.h"
 #endif
+#if CONFIG_HOMEHUB_MENU
+#include "menu.h"
+#endif
 #if CONFIG_HOMEHUB_SENSECAP_SENSORS
 #include "sensecap_sensors.h"
 #endif
@@ -2121,15 +2124,34 @@ void app_note_activity(void) {
 }
 
 #if CONFIG_HOMEHUB_DIAL
-// A press of the dial takes away a note or reply card, and turning it pages
-// through one, or else turns the volume. The menu comes later.
+// The dial works the menu while it's open. Otherwise a press takes away a
+// note or reply card, or opens the menu; turning pages through a card, or
+// else turns the volume.
 static void on_dial_press(void) {
     app_note_activity();
-    if (led_status_dismiss_card()) ESP_LOGI(TAG, "dial: card dismissed");
+#if CONFIG_HOMEHUB_MENU
+    if (menu_is_open()) {
+        menu_press();
+        return;
+    }
+#endif
+    if (led_status_dismiss_card()) {
+        ESP_LOGI(TAG, "dial: card dismissed");
+        return;
+    }
+#if CONFIG_HOMEHUB_MENU
+    menu_open();
+#endif
 }
 
 static void on_dial_turn(int steps) {
     app_note_activity();
+#if CONFIG_HOMEHUB_MENU
+    if (menu_is_open()) {
+        menu_turn(steps);
+        return;
+    }
+#endif
     if (led_status_scroll_card(steps)) return;
 #if CONFIG_HOMEHUB_VOICE
     voice_turn_volume(steps);
@@ -2150,19 +2172,11 @@ static void set_light_sleep(bool on) {
 #endif
 }
 
-// On the heartbeat: unused for the configured time, and not on a computer's
-// USB (which powers it anyway, and whose console sleep would cut off), the
-// board shows its sleep screen and deep-sleeps until the button wakes it.
-// Waking is a restart.
-static void sleep_if_unused(void) {
-    if (usb_serial_jtag_is_connected()) {
-        app_note_activity();  // the idle time starts when it's unplugged
-        return;
-    }
-    int64_t idle_us = esp_timer_get_time() - atomic_load(&s_last_activity_us);
-    if (idle_us < CONFIG_HOMEHUB_DEEP_SLEEP_IDLE_MIN * 60LL * 1000000LL) return;
+// The sleep screen, then deep sleep until the button (or the dial's push)
+// wakes it; waking is a restart. Returns only if it can't: in the middle of
+// setup, or the display can't get the board ready.
+static void deep_sleep_now(void) {
     if (!operation_gate_take(0, "deep sleep")) return;  // not in the middle of setup
-    ESP_LOGI(TAG, "unused for %d min: deep sleep until the button", CONFIG_HOMEHUB_DEEP_SLEEP_IDLE_MIN);
     // Each light sleep arms a wake-up timer, and one armed on the way down
     // woke the chip straight out of deep sleep: no more light sleep from here.
     set_light_sleep(false);
@@ -2192,6 +2206,24 @@ static void sleep_if_unused(void) {
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
     esp_sleep_enable_ext1_wakeup_io(wake_pins, ESP_EXT1_WAKEUP_ANY_LOW);
     esp_deep_sleep_start();
+}
+
+// On the heartbeat: unused for the configured time, and not on a computer's
+// USB (which powers it anyway, and whose console sleep would cut off).
+static void sleep_if_unused(void) {
+    if (usb_serial_jtag_is_connected()) {
+        app_note_activity();  // the idle time starts when it's unplugged
+        return;
+    }
+    int64_t idle_us = esp_timer_get_time() - atomic_load(&s_last_activity_us);
+    if (idle_us < CONFIG_HOMEHUB_DEEP_SLEEP_IDLE_MIN * 60LL * 1000000LL) return;
+    ESP_LOGI(TAG, "unused for %d min: deep sleep until the button", CONFIG_HOMEHUB_DEEP_SLEEP_IDLE_MIN);
+    deep_sleep_now();
+}
+
+void app_sleep_now(void) {
+    ESP_LOGI(TAG, "sleep now: deep sleep until the button");
+    deep_sleep_now();
 }
 #endif
 
@@ -2811,6 +2843,9 @@ void app_run(void) {
 #endif
 #if CONFIG_HOMEHUB_VOICE
     voice_init();
+#endif
+#if CONFIG_HOMEHUB_MENU
+    if (!menu_init()) ESP_LOGW(TAG, "no dial menu");
 #endif
 #if CONFIG_HOMEHUB_DIAL
     if (!dial_init(on_dial_press, on_dial_turn)) ESP_LOGW(TAG, "dial push unavailable");

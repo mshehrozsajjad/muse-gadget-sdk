@@ -100,6 +100,10 @@ if(CONFIG_HOMEHUB_DIAL)
     list(APPEND GADGET_SRCS "dial.c")
 endif()
 
+if(CONFIG_HOMEHUB_MENU)
+    list(APPEND GADGET_SRCS "menu.c")
+endif()
+
 if(CONFIG_HOMEHUB_SENSECAP_SENSORS)
     list(APPEND GADGET_SRCS "sensecap_sensors.c")
 endif()

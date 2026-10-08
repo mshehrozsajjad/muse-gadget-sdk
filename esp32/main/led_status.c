@@ -1202,6 +1202,14 @@ bool led_status_dismiss_card(void) {
     return false;
 }
 
+// No menu on a ring or a light.
+void led_status_show_menu(const led_menu_row_t *rows, int count, int selected, bool adjusting) {
+    (void)rows;
+    (void)count;
+    (void)selected;
+    (void)adjusting;
+}
+
 // No countdown here: the reset still comes after the hold.
 void led_status_show_reset_countdown(int seconds_left) {
     (void)seconds_left;

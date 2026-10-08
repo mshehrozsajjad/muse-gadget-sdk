@@ -20,11 +20,20 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "sdkconfig.h"
+
 void app_run(void);
 
 // Something the user did (a button press, a voice turn): restarts the time
 // to deep sleep (CONFIG_HOMEHUB_DEEP_SLEEP_IDLE_MIN). Any task.
 void app_note_activity(void);
+
+#if CONFIG_HOMEHUB_DEEP_SLEEP_IDLE_MIN > 0
+// Deep sleep now, as when unused (the sleep screen, then the button or the
+// dial's push wakes it, as a restart). Returns only if it can't, as in the
+// middle of setup. Any task.
+void app_sleep_now(void);
+#endif
 
 // How joining one of the saved Wi-Fi networks went.
 typedef enum {

@@ -113,3 +113,16 @@ bool led_status_scroll_card(int pages);
 // Take away a reply card or note, back to the status screen. True if one was
 // showing. Backends without a card return false.
 bool led_status_dismiss_card(void);
+
+// A menu row: its name on the left, its value (or "") on the right.
+#define LED_MENU_ROWS_MAX 8
+typedef struct {
+    char label[20];
+    char value[8];
+} led_menu_row_t;
+
+// Show a menu over everything but the reset countdown: `count` rows, the
+// `selected` one highlighted, its value marked for adjusting when
+// `adjusting`. Called again, it redraws only what changed. NULL (or a count
+// of 0) closes it. Backends without a display ignore it.
+void led_status_show_menu(const led_menu_row_t *rows, int count, int selected, bool adjusting);

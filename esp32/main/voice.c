@@ -36,6 +36,9 @@
 #include "button.h"
 #include "config_store.h"
 #include "led_status.h"
+#if CONFIG_HOMEHUB_MENU
+#include "menu.h"
+#endif
 #include "muse_chat.h"
 #include "voice_board.h"
 #include "voice_muse_chat.h"
@@ -342,6 +345,9 @@ static bool run_turn(void) {
 // Runs on the button task. Claims the press only when a turn can run, so the
 // button keeps its setup role otherwise.
 static bool on_press(bool pressed) {
+#if CONFIG_HOMEHUB_MENU
+    if (menu_take_paddle(pressed)) return true;  // it closed the menu instead
+#endif
     if (pressed) {
         if (!atomic_load(&s_ready) || voice_board_muted()) return false;
         voice_hatch_refresh();

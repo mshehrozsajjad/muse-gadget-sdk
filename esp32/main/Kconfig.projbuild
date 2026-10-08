@@ -390,6 +390,15 @@ menu "ESP32 Device SDK"
         range 0 48
         default 2
 
+    config HOMEHUB_MENU
+        bool "A menu on the dial"
+        depends on HOMEHUB_DIAL && HOMEHUB_VOICE
+        default n
+        help
+            A dial press on the main screen opens a menu on the display:
+            volume, sleep now and restart. Turning moves the selection, a
+            press picks; the paddle closes it, as does 15 s untouched.
+
     config HOMEHUB_NOTE_COMMAND
         bool "display.show_note: notes from Muse"
         depends on HOMEHUB_VOICE
