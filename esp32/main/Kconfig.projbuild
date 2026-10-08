@@ -400,6 +400,36 @@ menu "ESP32 Device SDK"
             the selection, a press picks; the paddle closes it, as does 15 s
             untouched.
 
+    config HOMEHUB_ABOUT_NAME
+        string "About: the device's name"
+        depends on HOMEHUB_MENU
+        default "Muse Gadget"
+        help
+            The first line of the menu's About card.
+
+    config HOMEHUB_ABOUT_CREDIT
+        string "About: what they did"
+        depends on HOMEHUB_MENU
+        default ""
+        help
+            The credit on the About card ("Created by"), wrapped
+            to fit, above the name below; empty for none.
+
+    config HOMEHUB_ABOUT_AUTHOR
+        string "About: who made it"
+        depends on HOMEHUB_MENU
+        default ""
+        help
+            The name under the credit, on a line of its own; empty for none.
+
+    config HOMEHUB_FIRMWARE_VERSION
+        string "About: the firmware's version"
+        depends on HOMEHUB_MENU
+        default "0.1.0"
+        help
+            Shown on the About card with the git commit it was built from
+            and the build date.
+
     config HOMEHUB_NOTE_COMMAND
         bool "display.show_note: notes from Muse"
         depends on HOMEHUB_VOICE

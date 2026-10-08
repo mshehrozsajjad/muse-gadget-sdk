@@ -129,3 +129,25 @@ idf_component_register(
     PRIV_INCLUDE_DIRS "../avatar"
     REQUIRES ${GADGET_REQUIRES}
 )
+
+# The menu's About card names the commit the firmware was built from. CMake
+# reconfigures whenever the commit changes (git's HEAD log grows), so it
+# stays current; "unknown" outside a git checkout.
+if(CONFIG_HOMEHUB_MENU)
+    execute_process(COMMAND git rev-parse --short HEAD
+                    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                    OUTPUT_VARIABLE FIRMWARE_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET RESULT_VARIABLE commit_result)
+    execute_process(COMMAND git rev-parse --absolute-git-dir
+                    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                    OUTPUT_VARIABLE git_dir OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET)
+    if(NOT commit_result EQUAL 0 OR NOT FIRMWARE_COMMIT)
+        set(FIRMWARE_COMMIT "unknown")
+    endif()
+    if(git_dir AND EXISTS "${git_dir}/logs/HEAD")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${git_dir}/logs/HEAD")
+    endif()
+    set_source_files_properties(menu.c PROPERTIES
+                                COMPILE_DEFINITIONS "FIRMWARE_COMMIT=\"${FIRMWARE_COMMIT}\"")
+endif()

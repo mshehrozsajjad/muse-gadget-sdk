@@ -17,6 +17,7 @@
 #include "menu.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_log.h"
@@ -27,12 +28,17 @@
 
 #include "app.h"
 #include "led_status.h"
+#include "muse_chat.h"
 #include "voice.h"
 
 static const char *TAG = "link.menu";
 
 // Closes by itself after this long untouched.
 #define MENU_TIMEOUT_MS 15000
+
+#ifndef FIRMWARE_COMMIT
+#define FIRMWARE_COMMIT "unknown"  // set by main/CMakeLists.txt
+#endif
 
 typedef enum {
     ITEM_VOLUME,   // a press starts adjusting it with the dial, another stops
@@ -45,6 +51,7 @@ typedef enum {
     ITEM_SLEEP,    // asks for a second press, then deep-sleeps
 #endif
     ITEM_RESTART,  // asks for a second press, then restarts
+    ITEM_ABOUT,    // closes the menu for a card: name, credit, firmware
     ITEM_COUNT,
 } item_t;
 
@@ -94,6 +101,9 @@ static int menu_rows(led_menu_row_t rows[ITEM_COUNT]) {
             case ITEM_RESTART:
                 strlcpy(rows[i].label, "Restart", sizeof(rows[i].label));
                 break;
+            case ITEM_ABOUT:
+                strlcpy(rows[i].label, "About", sizeof(rows[i].label));
+                break;
             case ITEM_COUNT:
                 break;
         }
@@ -124,6 +134,37 @@ static void on_timeout(void *arg) {
     (void)arg;
     ESP_LOGI(TAG, "closed: untouched");
     menu_close();
+}
+
+// `text` wrapped to the card, then a blank line; nothing if it's empty.
+static size_t add_paragraph(char *card, size_t at, size_t cap, const char *text) {
+    char copy[64], lines[128];
+    strlcpy(copy, text, sizeof(copy));
+    if (!copy[0] || !muse_hatch_wrap(copy, lines, sizeof(lines))) return at;
+    int n = snprintf(card + at, cap - at, "%s\n\n", lines);
+    return n > 0 && (size_t)n < cap - at ? at + n : at;
+}
+
+// The About card, until the dial's press takes it away: the name, the
+// credit and the name of who made it, then the firmware's version, commit
+// and build date (__DATE__ is "Oct  8 2026": the month and day).
+static void show_about(void) {
+    static char card[LED_STATUS_CARD_MAX];
+    size_t at = add_paragraph(card, 0, sizeof(card), CONFIG_HOMEHUB_ABOUT_NAME);
+    char credit[160];
+    snprintf(credit, sizeof(credit), "%s", CONFIG_HOMEHUB_ABOUT_CREDIT);
+    if (CONFIG_HOMEHUB_ABOUT_AUTHOR[0]) {
+        // The name on a line of its own, under the credit.
+        size_t before = at;
+        at = add_paragraph(card, at, sizeof(card), credit);
+        if (at > before) at -= 1;  // one line break, not a blank line
+        at = add_paragraph(card, at, sizeof(card), CONFIG_HOMEHUB_ABOUT_AUTHOR);
+    } else {
+        at = add_paragraph(card, at, sizeof(card), credit);
+    }
+    snprintf(card + at, sizeof(card) - at, "Firmware %s\n%s %.3s %d", CONFIG_HOMEHUB_FIRMWARE_VERSION,
+             FIRMWARE_COMMIT, __DATE__, atoi(__DATE__ + 4));
+    led_status_show_note(card);
 }
 
 // Flip a switch, and show what's now off on the status screen. Without
@@ -226,6 +267,9 @@ void menu_press(void) {
         case ITEM_VOLUME:
             s_adjusting = !s_adjusting;
             break;
+        case ITEM_ABOUT:
+            s_open = false;
+            break;
         case ITEM_MUTE:
         case ITEM_MIC:
 #if !CONFIG_MUSE_ENABLED
@@ -240,6 +284,12 @@ void menu_press(void) {
     }
     xSemaphoreGive(s_lock);
     if (toggle) toggle_item(item);
+    if (item == ITEM_ABOUT) {
+        esp_timer_stop(s_timeout);
+        show();  // the menu goes, and the card takes its place
+        show_about();
+        return;
+    }
     if (confirmed) {
         esp_timer_stop(s_timeout);
         show();  // the menu goes before the screen changes
