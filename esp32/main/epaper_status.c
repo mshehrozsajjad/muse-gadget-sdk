@@ -588,6 +588,13 @@ void led_status_set_switches(bool wifi_on, bool mic_on) {
     (void)mic_on;
 }
 
+// No battery reading here.
+bool led_status_battery(int *percent, bool *usb) {
+    (void)percent;
+    (void)usb;
+    return false;
+}
+
 // No menu here: nothing reads a dial on these boards.
 void led_status_show_menu(const led_menu_row_t *rows, int count, int selected, bool adjusting) {
     (void)rows;

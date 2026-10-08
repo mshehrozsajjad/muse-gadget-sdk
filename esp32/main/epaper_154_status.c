@@ -1245,6 +1245,14 @@ bool led_status_scroll_card(int pages) {
     return shown;
 }
 
+bool led_status_battery(int *percent, bool *usb) {
+    int mv = battery_154_millivolts();  // the ADC driver is thread-safe
+    if (mv <= 0) return false;
+    *percent = battery_154_percent(mv);
+    *usb = usb_serial_jtag_is_connected();
+    return true;
+}
+
 void led_status_set_switches(bool wifi_on, bool mic_on) {
     if (!s_ready) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);

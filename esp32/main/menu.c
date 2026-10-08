@@ -41,6 +41,7 @@ static const char *TAG = "link.menu";
 #endif
 
 typedef enum {
+    ITEM_BATTERY,  // read only, first: the selection starts and stops below it
     ITEM_VOLUME,   // a press starts adjusting it with the dial, another stops
     ITEM_MUTE,     // a press toggles it, as do the two below
     ITEM_MIC,
@@ -54,6 +55,8 @@ typedef enum {
     ITEM_ABOUT,    // closes the menu for a card: name, credit, firmware
     ITEM_COUNT,
 } item_t;
+
+#define ITEM_FIRST_SELECTABLE ITEM_VOLUME
 
 // Guards everything below. Never held while calling out to the display or to
 // voice_turn_volume, which take locks of their own, nor while sleeping or
@@ -104,6 +107,15 @@ static int menu_rows(led_menu_row_t rows[ITEM_COUNT]) {
             case ITEM_ABOUT:
                 strlcpy(rows[i].label, "About", sizeof(rows[i].label));
                 break;
+            case ITEM_BATTERY: {
+                int percent;
+                bool usb;
+                strlcpy(rows[i].label, "Battery", sizeof(rows[i].label));
+                if (!led_status_battery(&percent, &usb)) strlcpy(rows[i].value, "--", sizeof(rows[i].value));
+                // On USB it's charging and reads high: "~" says it's rough.
+                else snprintf(rows[i].value, sizeof(rows[i].value), usb ? "~%d%%" : "%d%%", percent);
+                break;
+            }
             case ITEM_COUNT:
                 break;
         }
@@ -214,7 +226,7 @@ void menu_open(void) {
     if (!s_lock) return;
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_open = true;
-    s_selected = 0;
+    s_selected = ITEM_FIRST_SELECTABLE;
     s_adjusting = false;
     s_confirming = -1;
     xSemaphoreGive(s_lock);
@@ -244,7 +256,8 @@ void menu_turn(int steps) {
     bool volume = s_adjusting && s_selected == ITEM_VOLUME;
     if (!volume) {
         int selected = s_selected + steps;
-        s_selected = selected < 0 ? 0 : selected >= ITEM_COUNT ? ITEM_COUNT - 1 : selected;
+        s_selected = selected < ITEM_FIRST_SELECTABLE ? ITEM_FIRST_SELECTABLE
+                     : selected >= ITEM_COUNT ? ITEM_COUNT - 1 : selected;
         s_confirming = -1;  // moving away cancels a pending second press
     }
     xSemaphoreGive(s_lock);

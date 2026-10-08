@@ -114,6 +114,10 @@ bool led_status_scroll_card(int pages);
 // showing. Backends without a card return false.
 bool led_status_dismiss_card(void);
 
+// The battery's charge now, 0 to 100, and `usb` when plugged into a
+// computer (charging, so the reading runs high). False without a reading.
+bool led_status_battery(int *percent, bool *usb);
+
 // What the menu has switched off: shown in place of the connection status
 // ("Wi-Fi off", or "Mic off" where it would say connected). Backends without
 // a screen ignore it.
