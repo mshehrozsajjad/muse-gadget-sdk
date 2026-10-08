@@ -33,6 +33,8 @@
 
 #include "voice_board.h"
 
+#include <math.h>
+
 #include "board_154_i2c.h"
 
 #include "driver/gpio.h"
@@ -61,16 +63,25 @@ static const char *TAG = "link.audio";
 #define AMP_WAKE_MS     60
 #define MIC_GAIN_DB     30.0f           // Waveshare's example gain
 
-// Volume to the DAC's level, listened to on the board's speaker: 60 %, the
-// SDK's default, suits speech at arm's length, and 100 % is the DAC's full
-// level, already loud, with no digital boost to distort speech. The codec
-// library takes 2.4 dB off each point, which it credits to the amplifier
-// (es8311 hw_gain), so every value here is 2.4 dB above the level it sets.
+// Volume to the DAC's level, so each 5 % click of the dial is heard: 5 % is
+// quiet but audible, 60 % (the SDK's default) suits speech at arm's length,
+// and 80 % is the DAC's full level. Above that, BOOST_MAX_DB more comes from
+// gain in software, its peaks rounded off by soft_limit(), for outdoors. 0 is
+// off: nothing plays (voice.c). The codec library takes 2.4 dB off each
+// point, which it credits to the amplifier (es8311 hw_gain), so every value
+// here is 2.4 dB above the level it sets.
 static esp_codec_dev_vol_map_t s_volume_map[] = {
     {.vol = 0, .db_value = -93.1f},   // -95.5 dB: the DAC's quietest
-    {.vol = 60, .db_value = -0.6f},   // -3 dB
-    {.vol = 100, .db_value = 2.4f},   // 0 dB
+    {.vol = 5, .db_value = -27.6f},   // -30 dB
+    {.vol = 50, .db_value = -6.6f},   // -9 dB
+    {.vol = 80, .db_value = 2.4f},    // 0 dB
+    {.vol = 100, .db_value = 2.4f},   // 0 dB, and the boost on top
 };
+#define BOOST_FROM      80     // volume where the software boost starts
+#define BOOST_MAX_DB    9.0f   // at 100 %
+// Below this fraction of full scale the boosted sound passes unchanged;
+// above it, it bends smoothly towards full scale rather than clipping.
+#define LIMIT_KNEE      0.6f
 // Samples per read or write: 20 ms.
 #define CHUNK           (AUDIO_RATE / 50)
 // The I2S receive ring: while the codec is open, the mic runs and the ring
@@ -94,6 +105,7 @@ static SemaphoreHandle_t s_audio_lock;
 static bool s_audio_open;
 static bool s_mic_on, s_amp_on;  // recording, playing: either keeps it open
 static int s_volume = 60;
+static float s_boost = 1.0f;  // software gain above BOOST_FROM, 1 below it
 
 // Opens the codec if it's closed; true if it was already open. Caller holds
 // s_audio_lock.
@@ -122,7 +134,10 @@ void voice_board_set_volume(int percent) {
     if (!s_speaker) return;
     if (percent < 0) percent = 0;
     if (percent > 100) percent = 100;
+    float boost_db = percent > BOOST_FROM
+                     ? BOOST_MAX_DB * (percent - BOOST_FROM) / (100 - BOOST_FROM) : 0.0f;
     xSemaphoreTake(s_audio_lock, portMAX_DELAY);
+    s_boost = powf(10.0f, boost_db / 20.0f);
     s_volume = percent;  // closed, it's set when the codec next opens
     if (s_audio_open) esp_codec_dev_set_out_vol(s_speaker, percent);
     xSemaphoreGive(s_audio_lock);
@@ -192,19 +207,32 @@ size_t voice_board_mic_read(int16_t *pcm, size_t frames, int *peak) {
     return frames;
 }
 
+// A boosted sample, `x` as a fraction of full scale, kept within it: unchanged
+// up to the knee, then eased towards full scale with tanh, so loud peaks are
+// rounded rather than clipped flat.
+static int16_t soft_limit(float x) {
+    float mag = fabsf(x);
+    if (mag > LIMIT_KNEE) {
+        mag = LIMIT_KNEE + (1.0f - LIMIT_KNEE) * tanhf((mag - LIMIT_KNEE) / (1.0f - LIMIT_KNEE));
+    }
+    return (int16_t)(copysignf(mag, x) * 32767.0f);
+}
+
 esp_err_t voice_board_speaker_write(const int32_t *frames, size_t count) {
     // The player sends 48 kHz stereo, upsampled from 16 kHz: average each
     // three frames back to the bus's 16 kHz, 16 bits a sample.
     if (!s_speaker) return ESP_ERR_INVALID_STATE;
     if (count % 3) return ESP_ERR_INVALID_SIZE;
     int16_t out[32 * 2];  // small: the player's task stack is 3 KB
+    const float boost = s_boost;
     while (count) {
         size_t n = count / 3;
         if (n > 32) n = 32;
         for (size_t i = 0; i < n; i++) {
             for (size_t c = 0; c < 2; c++) {
                 int64_t sum = (int64_t)frames[6 * i + c] + frames[6 * i + 2 + c] + frames[6 * i + 4 + c];
-                out[2 * i + c] = (int16_t)((sum / 3) >> 16);
+                int16_t sample = (int16_t)((sum / 3) >> 16);
+                out[2 * i + c] = boost > 1.0f ? soft_limit(sample * boost / 32768.0f) : sample;
             }
         }
         if (esp_codec_dev_write(s_speaker, out, n * 2 * sizeof(int16_t)) != ESP_CODEC_DEV_OK) {

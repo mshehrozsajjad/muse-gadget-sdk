@@ -67,6 +67,7 @@ typedef enum { EVT_PRESS, EVT_RELEASE, EVT_CHIME } voice_evt_t;
 static QueueHandle_t s_events;
 static atomic_bool s_ready;
 static atomic_int s_volume;
+static esp_timer_handle_t s_volume_save;  // stores the volume once turning stops
 
 static int load_volume(void) {
     char buf[8];
@@ -86,6 +87,30 @@ static void apply_volume(int volume) {
     atomic_store(&s_volume, volume);
     voice_board_set_volume(volume);
     led_status_show_volume(volume);
+}
+
+// On the esp_timer task, whose stack is in internal RAM: storing writes NVS.
+static void save_volume(void *arg) {
+    (void)arg;
+    int volume = atomic_load(&s_volume);
+    if (store_volume(volume)) ESP_LOGI(TAG, "volume %d", volume);
+    else ESP_LOGW(TAG, "volume could not be stored");
+}
+
+void voice_turn_volume(int steps) {
+    if (!atomic_load(&s_ready)) return;
+    int volume = atomic_load(&s_volume) + steps * VOLUME_STEP;
+    volume = volume < 0 ? 0 : volume > 100 ? 100 : volume;
+    // At an end, show it again rather than nothing, so the turn is answered.
+    apply_volume(volume);
+    if (s_volume_save) {
+        esp_timer_stop(s_volume_save);  // fails harmlessly when it isn't running
+        esp_timer_start_once(s_volume_save, VOLUME_SAVE_MS * 1000LL);
+    }
+}
+
+int voice_volume(void) {
+    return atomic_load(&s_volume);
 }
 
 // Turns the volume with the dial. On an internal-RAM stack: storing the volume
@@ -151,6 +176,7 @@ static size_t record(void) {
 // A short tone on the speaker: high when recording starts, low when it stops.
 // Faded in and out so it doesn't click.
 static void play_cue(bool start) {
+    if (!atomic_load(&s_volume)) return;  // speaker off
     static int16_t tone[VOICE_PLAYER_RATE * CUE_MS / 1000];
     const int n = sizeof(tone) / sizeof(tone[0]);
     const int fade = VOICE_PLAYER_RATE * CUE_FADE_MS / 1000;
@@ -174,6 +200,7 @@ static void play_cue(bool start) {
 // Two rising notes (E6 then A6), each faded so they ring rather than click:
 // unlike the cues, which say "recording", this says "something for you".
 static void play_chime(void) {
+    if (!atomic_load(&s_volume)) return;  // speaker off
     static int16_t tone[VOICE_PLAYER_RATE * CHIME_NOTE_MS / 1000];
     static const float notes_hz[] = {1318.5f, 1760.0f};
     const int n = sizeof(tone) / sizeof(tone[0]);
@@ -365,6 +392,8 @@ void voice_init(void) {
         return;
     }
     atomic_store(&s_volume, load_volume());
+    const esp_timer_create_args_t save = {.callback = save_volume, .name = "volume_save"};
+    if (esp_timer_create(&save, &s_volume_save) != ESP_OK) s_volume_save = NULL;
     voice_hatch_refresh();
     muse_hatch_start();
     // The stack is in PSRAM, so the task must not touch flash (NVS): pairing

@@ -1537,7 +1537,8 @@ static void start_tts(void)
          * end. decode() plays it at the speaker's volume, captions following,
          * and finishes the message once it's drained.
          */
-        if (s_turn.texts && muse_tts_start(s_turn.texts + i * TEXT_MAX)) {
+        /* With the speaker off, the reply is only shown: no TTS request. */
+        if (s_turn.texts && muse_settings_speaker_on() && muse_tts_start(s_turn.texts + i * TEXT_MAX)) {
             /* Spoken with ElevenLabs: tts_pump() brings the MP3 in, decode() plays it. */
             m.tts = TTS_ACTIVE;
             s_turn.tts_msg = i;
@@ -1554,6 +1555,9 @@ static void start_tts(void)
             ESP_LOGI(TAG, "speaking message %s (%u chars)", m.id, (unsigned)m.len);
             show_reply_start(m);
             return;
+        }
+        if (!muse_settings_speaker_on()) {
+            ESP_LOGI(TAG, "speaker off: message %s shown, not spoken", m.id);
         }
         m.pcm_start = s_turn.pcm_out;
         m.pcm_frames = (uint32_t)(m.len * MIC_RATE / TEXT_CHARS_PER_S);

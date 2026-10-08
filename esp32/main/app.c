@@ -2122,7 +2122,7 @@ void app_note_activity(void) {
 
 #if CONFIG_HOMEHUB_DIAL
 // A press of the dial takes away a note or reply card, and turning it pages
-// through one. The menu comes later.
+// through one, or else turns the volume. The menu comes later.
 static void on_dial_press(void) {
     app_note_activity();
     if (led_status_dismiss_card()) ESP_LOGI(TAG, "dial: card dismissed");
@@ -2130,7 +2130,10 @@ static void on_dial_press(void) {
 
 static void on_dial_turn(int steps) {
     app_note_activity();
-    led_status_scroll_card(steps);
+    if (led_status_scroll_card(steps)) return;
+#if CONFIG_HOMEHUB_VOICE
+    voice_turn_volume(steps);
+#endif
 }
 #endif
 

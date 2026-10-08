@@ -33,6 +33,12 @@ void voice_init(void);
 // top sets it too.
 cJSON *voice_configure_command(cJSON *params);
 
+// Turn the volume by dial clicks (5 % each), show it, and store it once the
+// turning stops. At 0 the speaker is off: replies are shown, not spoken.
+void voice_turn_volume(int steps);
+// The speaker volume, 0 to 100.
+int voice_volume(void);
+
 #if CONFIG_HOMEHUB_NOTE_COMMAND
 // display.show_note: puts {"text": "..."} on the reply card as a note, which
 // stays until the dial's push or the next voice turn, and chimes. Returns at

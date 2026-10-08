@@ -36,9 +36,9 @@ CONFIG_HOMEHUB_LED_BACKEND_WAVESHARE_EPAPER_154=y
 CONFIG_HOMEHUB_BUTTON_GPIO=0
 # Push-to-talk through the ES8311 codec, its mic and the speaker header.
 CONFIG_HOMEHUB_VOICE=y
-# Recordings under 2 s are dropped: an accidental press of the paddle
+# Recordings under 1.5 s are dropped: an accidental press of the paddle
 # shouldn't send Muse an empty note.
-CONFIG_HOMEHUB_VOICE_MIN_RECORD_MS=2000
+CONFIG_HOMEHUB_VOICE_MIN_RECORD_MS=1500
 # Offline, the paddle is the setup button: a reset takes a deliberate 15 s
 # hold, well past a long question, and the screen counts down the last 5.
 CONFIG_HOMEHUB_BUTTON_RESET_HOLD_S=15

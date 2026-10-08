@@ -29,6 +29,7 @@
 #include "app.h"
 #include "config_store.h"
 #include "led_status.h"
+#include "voice.h"
 #include "wifi_mgr.h"
 
 #include "muse_link.h"
@@ -87,9 +88,10 @@ size_t muse_settings_hatch_token_len(void) {
     return 0;
 }
 
-// No screen to show replies on: anything played goes to the speaker.
+// Volume 0 turns the speaker off: replies are shown, not spoken, and not
+// sent to the TTS service.
 bool muse_settings_speaker_on(void) {
-    return true;
+    return voice_volume() > 0;
 }
 
 // The reply card's page, on boards that have one; otherwise reply text is

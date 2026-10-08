@@ -147,6 +147,9 @@ static const char *TAG = "link.led";
 #define SCROLLBAR_MIN_H  12
 // The card gives way to the status screen this long after the turn ends.
 #define REPLY_SHOW_MS    60000
+// A volume change shows this long in place of the status text.
+#define VOLUME_SHOW_MS   2500
+#define VOLUME_STEPS     21   // 0 to 100 % in 5 % steps
 
 // Switch the battery hold, the panel and the audio rail (for the sensor) on,
 // and keep the first two through light sleep.
@@ -267,6 +270,8 @@ static led_voice_t s_voice = LED_VOICE_IDLE;
 static bool s_voice_changed;  // settle quickly: the change is a voice one
 static uint32_t s_pose_generation; // captures rapid leave/re-enter during a panel refresh
 static int s_reset_left;         // the button's reset countdown, 0 for none
+static int s_volume_shown;       // the volume last set, 0 to 100
+static int64_t s_volume_until;   // when its label goes, 0 when it isn't shown
 static char s_reply[REPLY_MAX];  // the reply card's wrapped lines, "" for none
 static int s_reply_page;         // the card's page shown, from 0
 static bool s_reply_sticky;      // a note: stays until dismissed, no timeout
@@ -535,6 +540,19 @@ static const char *countdown_label(int left) {
     return labels[left - 1];
 }
 
+// The status text for a volume, 0 to 100: a label per 5 % step, so that a
+// change of volume is a change of label (labels are compared by pointer).
+static const char *volume_label(int percent) {
+    static char labels[VOLUME_STEPS][16];
+    int step = (percent + 2) / 5;
+    step = step < 0 ? 0 : step >= VOLUME_STEPS ? VOLUME_STEPS - 1 : step;
+    if (!labels[step][0]) {
+        if (step) snprintf(labels[step], sizeof(labels[step]), "Volume %d%%", step * 5);
+        else strlcpy(labels[step], "Speaker off", sizeof(labels[step]));
+    }
+    return labels[step];
+}
+
 // The status text for a voice turn's state, NULL when idle.
 static const char *voice_label(led_voice_t voice) {
     switch (voice) {
@@ -759,6 +777,7 @@ static void epd_task(void *arg) {
     int wifi = 0, battery = -1;
     climate_t climate = {0};
     int64_t card_until = 0;  // when the reply card goes, 0 while it stays
+    int64_t volume_until = 0;  // when the volume label goes, 0 when it isn't shown
     epaper_animation_t animation = {0};
 #if CONFIG_HOMEHUB_EPAPER_154_ANIMATIONS
     const bool animate = true;
@@ -776,6 +795,10 @@ static void epd_task(void *arg) {
         }
         if (card_until) {
             int64_t left_ms = (card_until - esp_timer_get_time()) / 1000;
+            wait_ms = left_ms < 0 ? 0 : left_ms < wait_ms ? (int)left_ms : wait_ms;
+        }
+        if (volume_until) {
+            int64_t left_ms = (volume_until - esp_timer_get_time()) / 1000;
             wait_ms = left_ms < 0 ? 0 : left_ms < wait_ms ? (int)left_ms : wait_ms;
         }
         if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wait_ms)) && animation.initialized) {
@@ -821,6 +844,9 @@ static void epd_task(void *arg) {
         uint32_t generation = s_pose_generation;
         bool voice_idle = s_voice == LED_VOICE_IDLE;
         int reset_left = s_reset_left;
+        if (s_volume_until && esp_timer_get_time() >= s_volume_until) s_volume_until = 0;
+        volume_until = s_volume_until;
+        int volume = s_volume_shown;
         bool boot_allowed = !reset_left && s_voice == LED_VOICE_IDLE && s_state != LED_STATE_ERROR &&
                             s_state != LED_STATE_UNPAIRED &&
                             s_state != LED_STATE_PAIRING_CONFIRM_REQUIRED && !reply[0];
@@ -832,6 +858,8 @@ static void epd_task(void *arg) {
             label = countdown_label(reset_left);
             mode = MUSE_MODE_ERROR;
             reply[0] = '\0';
+        } else if (volume_until) {
+            label = volume_label(volume);  // the pose stays as it is
         }
 
         xSemaphoreTake(s_panel_lock, portMAX_DELAY);
@@ -861,7 +889,7 @@ static void epd_task(void *arg) {
         // The first screen, and the first after an image or a failed refresh,
         // is full. Otherwise the ghosting is cleaned when the screen is calm.
         bool animating = animation.last && animation.frame < animation.last;
-        bool calm = voice_idle && !reply[0] && !animating && !reset_left;
+        bool calm = voice_idle && !reply[0] && !animating && !reset_left && !volume_until;
         bool full = !s_status_drawn || s_fast_refreshes >= CLEAN_FORCE_FAST
                     || (calm && s_fast_refreshes >= CLEAN_AFTER_FAST);
         if (redraw) {
@@ -1218,8 +1246,15 @@ void led_status_set_level(float level) {
     (void)level;
 }
 
-// Nothing turns the volume on the device yet (no dial), so nothing to show.
+// In place of the status text for a moment; a card hides it (turning the
+// dial scrolls a card rather than turning the volume).
 void led_status_show_volume(int percent) {
-    (void)percent;
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_volume_shown = percent;
+    s_volume_until = esp_timer_get_time() + VOLUME_SHOW_MS * 1000LL;
+    s_voice_changed = true;  // show it at once, as a voice change would
+    xSemaphoreGive(s_mutex);
+    xTaskNotifyGive(s_task);
 }
 #endif
