@@ -96,6 +96,10 @@ if(CONFIG_HOMEHUB_VOICE_CODEC STREQUAL "es8311")
     list(APPEND GADGET_REQUIRES esp_codec_dev)
 endif()
 
+if(CONFIG_HOMEHUB_DIAL)
+    list(APPEND GADGET_SRCS "dial.c")
+endif()
+
 if(CONFIG_HOMEHUB_SENSECAP_SENSORS)
     list(APPEND GADGET_SRCS "sensecap_sensors.c")
 endif()

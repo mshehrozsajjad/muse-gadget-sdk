@@ -1190,7 +1190,17 @@ void led_status_show_reply(const char *page, bool more, bool compact) {
     (void)more;
     (void)compact;
 }
+
+void led_status_show_note(const char *page, bool more, bool compact) {
+    (void)page;
+    (void)more;
+    (void)compact;
+}
 #endif
+
+bool led_status_dismiss_card(void) {
+    return false;
+}
 
 // No countdown here: the reset still comes after the hold.
 void led_status_show_reset_countdown(int seconds_left) {

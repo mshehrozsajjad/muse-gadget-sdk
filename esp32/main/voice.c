@@ -53,7 +53,7 @@ static const char *TAG = "link.voice";
 #define DIAL_POLL_MS        20
 
 #define CAPTURE_MAX_MS      15000
-#define CAPTURE_MIN_MS      300
+#define CAPTURE_MIN_MS      CONFIG_HOMEHUB_VOICE_MIN_RECORD_MS
 #define CAPTURE_CHUNK       (VOICE_MIC_RATE / 50)      // 20 ms
 #define CAPTURE_MAX         (VOICE_MIC_RATE * CAPTURE_MAX_MS / 1000)
 // Keep listening briefly after release so the last word is not clipped.
@@ -61,7 +61,8 @@ static const char *TAG = "link.voice";
 #define REPLY_CHUNK         (VOICE_PLAYER_RATE / 50)   // 20 ms
 #define REPLY_PAGE_CHECK_MS 500
 
-typedef enum { EVT_PRESS, EVT_RELEASE } voice_evt_t;
+// EVT_CHIME: a note came in; chimes between turns, and is dropped during one.
+typedef enum { EVT_PRESS, EVT_RELEASE, EVT_CHIME } voice_evt_t;
 
 static QueueHandle_t s_events;
 static atomic_bool s_ready;
@@ -162,6 +163,33 @@ static void play_cue(bool start) {
     voice_player_begin();
     voice_player_write(tone, n);
     voice_player_end();
+}
+#endif
+
+#if CONFIG_HOMEHUB_NOTE_COMMAND
+#define CHIME_NOTE_MS  140
+#define CHIME_FADE_MS  20
+#define CHIME_LEVEL    10000
+
+// Two rising notes (E6 then A6), each faded so they ring rather than click:
+// unlike the cues, which say "recording", this says "something for you".
+static void play_chime(void) {
+    static int16_t tone[VOICE_PLAYER_RATE * CHIME_NOTE_MS / 1000];
+    static const float notes_hz[] = {1318.5f, 1760.0f};
+    const int n = sizeof(tone) / sizeof(tone[0]);
+    const int fade_in = VOICE_PLAYER_RATE * CHIME_FADE_MS / 1000;
+    voice_player_begin();
+    for (size_t k = 0; k < sizeof(notes_hz) / sizeof(notes_hz[0]); k++) {
+        for (int i = 0; i < n; i++) {
+            // A quick fade in, then a long linear decay to silence.
+            float gain = i < fade_in ? (float)i / fade_in : (float)(n - 1 - i) / (n - fade_in);
+            tone[i] = (int16_t)(CHIME_LEVEL * gain
+                                * sinf(2.0f * (float)M_PI * notes_hz[k] * i / VOICE_PLAYER_RATE));
+        }
+        voice_player_write(tone, n);
+    }
+    voice_player_end();
+    voice_player_wait(CHIME_NOTE_MS * 4);
 }
 #endif
 
@@ -321,7 +349,15 @@ static void voice_task(void *arg) {
     ESP_LOGI(TAG, "ready");
 
     for (;;) {
-        if (!pressed_again(portMAX_DELAY)) continue;
+        voice_evt_t evt;
+        if (xQueueReceive(s_events, &evt, portMAX_DELAY) != pdTRUE) continue;
+#if CONFIG_HOMEHUB_NOTE_COMMAND
+        if (evt == EVT_CHIME) {
+            play_chime();
+            continue;
+        }
+#endif
+        if (evt != EVT_PRESS) continue;
         while (run_turn()) {
         }
         wifi_mgr_power_hold(false);  // the turn and its reply are over
@@ -373,3 +409,61 @@ cJSON *voice_configure_command(cJSON *params) {
     cJSON_AddNumberToObject(result, "volume", atomic_load(&s_volume));
     return result;
 }
+
+#if CONFIG_HOMEHUB_NOTE_COMMAND
+#define NOTE_MAX_CHARS 1000
+
+static cJSON *note_error(const char *why) {
+    cJSON *result = cJSON_CreateObject();
+    cJSON_AddBoolToObject(result, "ok", false);
+    cJSON *error = cJSON_CreateObject();
+    cJSON_AddStringToObject(error, "code", "invalid_params");
+    cJSON_AddStringToObject(error, "message", why);
+    cJSON_AddItemToObject(result, "error", error);
+    return result;
+}
+
+// The note's opening page, wrapped as a reply is: in the normal size if it
+// fits, otherwise in the compact one (`compact`). True if it goes on past
+// that page.
+static bool note_page(const char *text, char *page, size_t cap, bool *compact) {
+    static char last[512];
+    bool more = false;
+    for (int c = 0; c < 2; c++) {
+        *compact = c;
+        voice_reply_compact(*compact);
+        page[0] = '\0';
+        if (!muse_hatch_caption_at(text, 0, page, cap)) break;
+        more = muse_hatch_caption_at(text, SIZE_MAX, last, sizeof(last)) && strcmp(page, last) != 0;
+        if (!more) break;
+    }
+    voice_reply_compact(false);
+    return more;
+}
+
+// Runs on the Noise session's task: the wrapping is quick, and the chime is
+// left to the voice task.
+cJSON *voice_note_command(cJSON *params) {
+    static char text[NOTE_MAX_CHARS + 1];
+    static char page[512];
+    cJSON *item = cJSON_GetObjectItem(params, "text");
+    if (!cJSON_IsString(item) || !item->valuestring[0]) return note_error("text is required");
+    if (strlen(item->valuestring) > NOTE_MAX_CHARS) return note_error("text is over 1000 characters");
+    strlcpy(text, item->valuestring, sizeof(text));
+    muse_hatch_plain_text(text);
+    if (!text[0]) return note_error("text is empty once its Markdown is removed");
+
+    bool compact;
+    bool more = note_page(text, page, sizeof(page), &compact);
+    led_status_show_note(page, more, compact);
+    ESP_LOGI(TAG, "note: %s", text);
+
+    if (atomic_load(&s_ready)) {
+        voice_evt_t evt = EVT_CHIME;
+        xQueueSend(s_events, &evt, 0);
+    }
+    cJSON *result = cJSON_CreateObject();
+    cJSON_AddBoolToObject(result, "ok", true);
+    return result;
+}
+#endif

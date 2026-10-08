@@ -1368,6 +1368,19 @@ static char *build_register_json(void) {
                 nullptr, volume_optional);
 #endif
 
+#if CONFIG_HOMEHUB_NOTE_COMMAND
+    cJSON *note_required = cJSON_CreateObject();
+    cJSON_AddItemToObject(note_required, "text",
+                          string_param("The note, plain text; about 250 characters fit "
+                                       "on the screen, the rest is cut off."));
+    add_command(commands, "display.show_note",
+                "Show a short note on the device's screen, with a chime, without being "
+                "asked: say a task has finished or something needs the user. It stays "
+                "until the user presses the dial or talks. Fails if the device is "
+                "asleep or offline.",
+                note_required, nullptr);
+#endif
+
 #if CONFIG_HOMEHUB_SENSECAP_SENSORS
     add_command(commands, "sensors.read",
                 "Read the air sensors: CO2 in ppm, the tVOC index (1-500, 100 "

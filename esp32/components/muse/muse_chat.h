@@ -104,6 +104,10 @@ muse_hatch_ev_t muse_hatch_turn_event(char *text, size_t cap);
  * ("# " at a line's start) go. Returns the new length. */
 size_t muse_hatch_plain_text(char *s);
 
+/* The page of `text`, wrapped to muse_state_page, that holds byte `at`: 0 for
+ * the opening page, SIZE_MAX for the last. False if there's no text. */
+bool muse_hatch_caption_at(const char *text, size_t at, char *out, size_t cap);
+
 /*
  * The page of reply text holding what's being said after `played` frames of
  * reply speech (sized by muse_state_page), or before the speech its opening

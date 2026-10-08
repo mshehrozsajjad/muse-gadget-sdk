@@ -281,6 +281,7 @@ static int s_reset_left;         // the button's reset countdown, 0 for none
 static char s_reply[REPLY_MAX];  // the reply card's page, "" for none
 static bool s_reply_more;        // the reply goes on past the page
 static bool s_reply_compact;     // laid out with s_layout_compact
+static bool s_reply_sticky;      // a note: stays until dismissed, no timeout
 static char s_title[48];
 static TaskHandle_t s_task;
 
@@ -791,8 +792,8 @@ static void epd_task(void *arg) {
         char title[sizeof(s_title)];
         static char reply[REPLY_MAX];
         xSemaphoreTake(s_mutex, portMAX_DELAY);
-        // The card's time starts once the turn is over.
-        if (!s_reply[0] || s_voice != LED_VOICE_IDLE) {
+        // The card's time starts once the turn is over; a note has none.
+        if (!s_reply[0] || s_voice != LED_VOICE_IDLE || s_reply_sticky) {
             card_until = 0;
         } else if (!card_until) {
             card_until = esp_timer_get_time() + REPLY_SHOW_MS * 1000LL;
@@ -1117,6 +1118,21 @@ void led_status_show_animation(void) {
     if (was_image) xTaskNotifyGive(s_task);
 }
 
+bool led_status_dismiss_card(void) {
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool shown = s_reply[0] != '\0';
+    s_reply[0] = '\0';
+    s_reply_sticky = false;
+    if (shown) {
+        s_voice_changed = true;  // back to the status screen at once
+        s_pose_generation++;
+    }
+    xSemaphoreGive(s_mutex);
+    if (shown) xTaskNotifyGive(s_task);
+    return shown;
+}
+
 // ---- Voice -----------------------------------------------------------------
 
 #if CONFIG_HOMEHUB_VOICE
@@ -1129,7 +1145,10 @@ void led_status_set_voice(led_voice_t voice) {
         s_voice_changed = true;
         s_pose_generation++;
     }
-    if (voice == LED_VOICE_LISTENING) s_reply[0] = '\0';  // a new turn: the card goes
+    if (voice == LED_VOICE_LISTENING) {  // a new turn: the card goes
+        s_reply[0] = '\0';
+        s_reply_sticky = false;
+    }
     xSemaphoreGive(s_mutex);
     if (changed) xTaskNotifyGive(s_task);
 }
@@ -1141,19 +1160,28 @@ bool led_status_reply_page(bool compact, int *cols, int *lines) {
     return true;
 }
 
-void led_status_show_reply(const char *page, bool more, bool compact) {
+static void show_card(const char *page, bool more, bool compact, bool sticky) {
     if (!s_ready || !page) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     bool changed = strcmp(s_reply, page) != 0 || s_reply_more != more || s_reply_compact != compact;
     snprintf(s_reply, sizeof(s_reply), "%s", page);
     s_reply_more = more;
     s_reply_compact = compact;
+    s_reply_sticky = sticky;
     if (changed) {
         s_voice_changed = true;
         s_pose_generation++;
     }
     xSemaphoreGive(s_mutex);
     if (changed) xTaskNotifyGive(s_task);
+}
+
+void led_status_show_reply(const char *page, bool more, bool compact) {
+    show_card(page, more, compact, false);
+}
+
+void led_status_show_note(const char *page, bool more, bool compact) {
+    show_card(page, more, compact, true);
 }
 
 // No live level meter: e-paper can't keep up with it.

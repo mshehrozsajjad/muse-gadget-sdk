@@ -36,6 +36,9 @@ CONFIG_HOMEHUB_LED_BACKEND_WAVESHARE_EPAPER_154=y
 CONFIG_HOMEHUB_BUTTON_GPIO=0
 # Push-to-talk through the ES8311 codec, its mic and the speaker header.
 CONFIG_HOMEHUB_VOICE=y
+# Recordings under 2 s are dropped: an accidental press of the paddle
+# shouldn't send Muse an empty note.
+CONFIG_HOMEHUB_VOICE_MIN_RECORD_MS=2000
 # Offline, the paddle is the setup button: a reset takes a deliberate 15 s
 # hold, well past a long question, and the screen counts down the last 5.
 CONFIG_HOMEHUB_BUTTON_RESET_HOLD_S=15
@@ -71,6 +74,15 @@ CONFIG_HOMEHUB_BUTTON_WAKE=y
 # the e-paper, everything off but the battery hold, and deep sleep until the
 # paddle wakes it.
 CONFIG_HOMEHUB_DEEP_SLEEP_IDLE_MIN=60
+
+# The EC11 dial on the header: A on IO1, B on IO2, the push on IO3, common
+# and the push's other leg to ground. Its push dismisses a card, such as a
+# note Muse sends (display.show_note), and wakes the device.
+CONFIG_HOMEHUB_DIAL=y
+CONFIG_HOMEHUB_DIAL_PUSH_GPIO=3
+CONFIG_HOMEHUB_DIAL_A_GPIO=1
+CONFIG_HOMEHUB_DIAL_B_GPIO=2
+CONFIG_HOMEHUB_NOTE_COMMAND=y
 
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y

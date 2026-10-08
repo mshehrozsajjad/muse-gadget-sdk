@@ -363,6 +363,42 @@ menu "ESP32 Device SDK"
             wakes it. Waking restarts it: it rejoins Wi-Fi and Muse as at
             boot. Needs a display backend that prepares the board for it.
 
+    config HOMEHUB_DIAL
+        bool "Rotary dial with a push switch (EC11)"
+        default n
+        help
+            A rotary encoder (A and B to ground through its common pin) and
+            its push switch, each on a GPIO with the internal pull-up. The
+            push dismisses a card on the display and wakes the device; the
+            rotation isn't used yet.
+
+    config HOMEHUB_DIAL_PUSH_GPIO
+        int "Dial push switch GPIO"
+        depends on HOMEHUB_DIAL
+        range 0 48
+        default 3
+
+    config HOMEHUB_DIAL_A_GPIO
+        int "Dial A GPIO"
+        depends on HOMEHUB_DIAL
+        range 0 48
+        default 1
+
+    config HOMEHUB_DIAL_B_GPIO
+        int "Dial B GPIO"
+        depends on HOMEHUB_DIAL
+        range 0 48
+        default 2
+
+    config HOMEHUB_NOTE_COMMAND
+        bool "display.show_note: notes from Muse"
+        depends on HOMEHUB_VOICE
+        default n
+        help
+            Lets Muse show a short text note on the display, with a chime,
+            whenever it likes (a long task finishing, say). It stays until the
+            dial's push dismisses it, or the next voice turn.
+
     config HOMEHUB_BUTTON_WAKE
         bool "Wake on the button instead of polling it"
         default n
@@ -381,6 +417,15 @@ menu "ESP32 Device SDK"
             Holding the button this long (unless push-to-talk has the press)
             unpairs the device and forgets its Wi-Fi. Boards that show it
             count down the last five seconds, so a release can cancel it.
+
+    config HOMEHUB_VOICE_MIN_RECORD_MS
+        int "Shortest recording sent to Muse, in ms"
+        depends on HOMEHUB_VOICE
+        range 100 5000
+        default 300
+        help
+            A push-to-talk recording shorter than this is dropped rather than
+            sent, so an accidental press doesn't reach Muse as an empty note.
 
     config HOMEHUB_VOICE_CUES
         bool "Beep when recording starts and stops"

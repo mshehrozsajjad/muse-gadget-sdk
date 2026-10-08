@@ -100,3 +100,9 @@ bool led_status_reply_page(bool compact, int *cols, int *lines);
 // and `compact` when it was wrapped to the compact page. Backends without a
 // card ignore it.
 void led_status_show_reply(const char *page, bool more, bool compact);
+// As led_status_show_reply, for a note Muse sent on its own: it stays, with
+// no timeout, until led_status_dismiss_card() or the next voice turn.
+void led_status_show_note(const char *page, bool more, bool compact);
+// Take away a reply card or note, back to the status screen. True if one was
+// showing. Backends without a card return false.
+bool led_status_dismiss_card(void);

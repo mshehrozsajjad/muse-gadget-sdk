@@ -23,6 +23,7 @@
 #pragma once
 
 #include "cJSON.h"
+#include "sdkconfig.h"
 
 // Start the voice task. It brings up the audio hardware and then takes over
 // the button whenever a turn can run.
@@ -31,3 +32,10 @@ void voice_init(void);
 // voice.configure: sets the speaker volume (0-100), kept in NVS. The dial on
 // top sets it too.
 cJSON *voice_configure_command(cJSON *params);
+
+#if CONFIG_HOMEHUB_NOTE_COMMAND
+// display.show_note: puts {"text": "..."} on the reply card as a note, which
+// stays until the dial's push or the next voice turn, and chimes. Returns at
+// once with {"ok": true}, or an invalid_params error.
+cJSON *voice_note_command(cJSON *params);
+#endif

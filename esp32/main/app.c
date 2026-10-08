@@ -68,6 +68,9 @@
 #if CONFIG_HOMEHUB_VOICE
 #include "voice.h"
 #endif
+#if CONFIG_HOMEHUB_DIAL
+#include "dial.h"
+#endif
 #if CONFIG_HOMEHUB_SENSECAP_SENSORS
 #include "sensecap_sensors.h"
 #endif
@@ -1898,6 +1901,11 @@ static cJSON *on_ws_command(
         return voice_configure_command(params);
     }
 #endif
+#if CONFIG_HOMEHUB_NOTE_COMMAND
+    if (strcmp(command, "display.show_note") == 0) {
+        return voice_note_command(params);
+    }
+#endif
 #if CONFIG_HOMEHUB_SENSECAP_SENSORS
     if (strcmp(command, "sensors.read") == 0) {
         return sensecap_sensors_command();
@@ -2112,6 +2120,14 @@ void app_note_activity(void) {
     atomic_store(&s_last_activity_us, esp_timer_get_time());
 }
 
+#if CONFIG_HOMEHUB_DIAL
+// A press of the dial takes away a note or reply card. The menu comes later.
+static void on_dial_press(void) {
+    app_note_activity();
+    if (led_status_dismiss_card()) ESP_LOGI(TAG, "dial: card dismissed");
+}
+#endif
+
 #if CONFIG_HOMEHUB_DEEP_SLEEP_IDLE_MIN > 0
 // Automatic light sleep on or off; the clock range stays as the board set it.
 static void set_light_sleep(bool on) {
@@ -2152,13 +2168,20 @@ static void sleep_if_unused(void) {
     // pulls it low. Asleep, only the RTC pull-up holds it high, so the RTC
     // peripherals stay powered for it; without it the pin drifts low and
     // wakes the chip at once.
-    const gpio_num_t button = (gpio_num_t)CONFIG_HOMEHUB_BUTTON_GPIO;
-    rtc_gpio_pullup_en(button);
-    rtc_gpio_pulldown_dis(button);
+    // The dial's push, wired the same way, wakes it too.
+    uint64_t wake_pins = 1ULL << CONFIG_HOMEHUB_BUTTON_GPIO;
+#if CONFIG_HOMEHUB_DIAL
+    wake_pins |= 1ULL << CONFIG_HOMEHUB_DIAL_PUSH_GPIO;
+#endif
+    for (int pin = 0; pin < 64; pin++) {
+        if (!(wake_pins >> pin & 1)) continue;
+        rtc_gpio_pullup_en((gpio_num_t)pin);
+        rtc_gpio_pulldown_dis((gpio_num_t)pin);
+    }
     esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
-    // Last, with nothing in between to arm anything else: the button only.
+    // Last, with nothing in between to arm anything else: the presses only.
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
-    esp_sleep_enable_ext1_wakeup_io(1ULL << button, ESP_EXT1_WAKEUP_ANY_LOW);
+    esp_sleep_enable_ext1_wakeup_io(wake_pins, ESP_EXT1_WAKEUP_ANY_LOW);
     esp_deep_sleep_start();
 }
 #endif
@@ -2619,7 +2642,10 @@ void app_run(void) {
     if (esp_sleep_get_wakeup_causes() & (1UL << ESP_SLEEP_WAKEUP_EXT1)) {
         ESP_LOGI(TAG, "woke from deep sleep: button (pins 0x%llx)",
                  (unsigned long long)esp_sleep_get_ext1_wakeup_status());
-        rtc_gpio_deinit((gpio_num_t)CONFIG_HOMEHUB_BUTTON_GPIO);  // back to a plain GPIO
+        rtc_gpio_deinit((gpio_num_t)CONFIG_HOMEHUB_BUTTON_GPIO);  // back to plain GPIOs
+#if CONFIG_HOMEHUB_DIAL
+        rtc_gpio_deinit((gpio_num_t)CONFIG_HOMEHUB_DIAL_PUSH_GPIO);
+#endif
     }
 #endif
     config_store_init();
@@ -2776,6 +2802,9 @@ void app_run(void) {
 #endif
 #if CONFIG_HOMEHUB_VOICE
     voice_init();
+#endif
+#if CONFIG_HOMEHUB_DIAL
+    if (!dial_init(on_dial_press)) ESP_LOGW(TAG, "dial push unavailable");
 #endif
 #if CONFIG_HOMEHUB_SENSECAP_SENSORS
     sensecap_sensors_init();
