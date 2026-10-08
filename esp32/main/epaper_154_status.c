@@ -284,6 +284,7 @@ static int s_menu_count;         // rows shown, 0 when the menu is closed
 static int s_menu_selected;
 static bool s_menu_adjusting;
 static uint32_t s_menu_version;  // bumped by each change, to know when to redraw
+static bool s_wifi_off, s_mic_off;  // switched off in the menu
 static char s_reply[REPLY_MAX];  // the reply card's wrapped lines, "" for none
 static int s_reply_page;         // the card's page shown, from 0
 static bool s_reply_sticky;      // a note: stays until dismissed, no timeout
@@ -539,6 +540,8 @@ static void draw_status(const char *text, int y, int scale) {
 }
 
 #define SLEEP_LABEL "Press to wake"
+#define WIFI_OFF_LABEL "Wi-Fi off"
+#define MIC_OFF_LABEL "Mic off"
 
 // How many pages the card's wrapped lines take, overlapping by a line.
 static int card_pages(const char *text) {
@@ -901,6 +904,13 @@ static void epd_task(void *arg) {
                             s_state != LED_STATE_UNPAIRED &&
                             s_state != LED_STATE_PAIRING_CONFIRM_REQUIRED && !reply[0] &&
                             !menu_count;
+        if (!label && s_wifi_off) {
+            // Not "Reconnecting": it isn't trying, and the character rests.
+            label = WIFI_OFF_LABEL;
+            mode = MUSE_MODE_IDLE;
+        } else if (!label && s_mic_off && s_state == LED_STATE_WS_CONNECTED) {
+            label = MIC_OFF_LABEL;
+        }
         if (!label) label = status_label(s_state);
         memcpy(title, s_title, sizeof(title));
         xSemaphoreGive(s_mutex);
@@ -1233,6 +1243,16 @@ bool led_status_scroll_card(int pages) {
     xSemaphoreGive(s_mutex);
     if (changed) xTaskNotifyGive(s_task);
     return shown;
+}
+
+void led_status_set_switches(bool wifi_on, bool mic_on) {
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool changed = s_wifi_off != !wifi_on || s_mic_off != !mic_on;
+    s_wifi_off = !wifi_on;
+    s_mic_off = !mic_on;
+    xSemaphoreGive(s_mutex);
+    if (changed) xTaskNotifyGive(s_task);
 }
 
 void led_status_show_menu(const led_menu_row_t *rows, int count, int selected, bool adjusting) {

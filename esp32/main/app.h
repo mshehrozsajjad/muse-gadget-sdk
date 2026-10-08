@@ -73,6 +73,15 @@ bool app_confirm_pairing_press(void);
 void app_reset_setup_async(void);
 #endif
 
+#if !CONFIG_MUSE_ENABLED
+// Wi-Fi off (airplane mode): leaves the network, stops the radio and stops
+// looking for saved networks; on starts it and looks at once, the session
+// following. Not kept across a restart. False if a join or setup kept it
+// busy for 5 s. Any task but the main one, which it may wait for.
+bool app_set_wifi(bool on);
+bool app_wifi_on(void);
+#endif
+
 #if CONFIG_MUSE_ENABLED || CONFIG_HOMEHUB_VOICE
 // Looks up a VM credential from the paired account (want_vm: a VM id, or empty
 // for the preferred VM). *vm_token is heap; free() it.

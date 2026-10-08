@@ -38,6 +38,16 @@ cJSON *voice_configure_command(cJSON *params);
 void voice_turn_volume(int steps);
 // The speaker volume, 0 to 100.
 int voice_volume(void);
+// Mute the speaker, keeping the volume for when it's unmuted (turning the
+// volume unmutes too). Muted, or at volume 0, replies are shown, not spoken.
+void voice_set_muted(bool muted);
+bool voice_muted(void);
+// Whether replies, cues and chimes are heard: volume above 0 and not muted.
+bool voice_speaker_on(void);
+// Mic off: the paddle sends nothing, keeping only its setup role. Neither
+// this nor mute outlasts a restart.
+void voice_set_mic(bool on);
+bool voice_mic_on(void);
 
 #if CONFIG_HOMEHUB_NOTE_COMMAND
 // display.show_note: puts {"text": "..."} on the reply card as a note, which

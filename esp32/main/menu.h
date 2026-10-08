@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 
-// The dial's menu (CONFIG_HOMEHUB_MENU): a dial press on the main screen opens
-// it, turning moves the selection, a press picks. The paddle closes it, and so
-// does leaving it alone for a while. What it shows is drawn by the display
+// The dial's menu (CONFIG_HOMEHUB_MENU): volume, mute, mic, Wi-Fi, sleep now
+// and restart. A dial press on the main screen opens it, turning moves the
+// selection, a press picks. The paddle closes it, and so does leaving it
+// alone for a while. What it shows is drawn by the display
 // (led_status_show_menu); this keeps its state and does what's picked. All
 // of it is safe from any task.
 

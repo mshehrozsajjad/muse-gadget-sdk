@@ -396,8 +396,9 @@ menu "ESP32 Device SDK"
         default n
         help
             A dial press on the main screen opens a menu on the display:
-            volume, sleep now and restart. Turning moves the selection, a
-            press picks; the paddle closes it, as does 15 s untouched.
+            volume, mute, mic, Wi-Fi, sleep now and restart. Turning moves
+            the selection, a press picks; the paddle closes it, as does 15 s
+            untouched.
 
     config HOMEHUB_NOTE_COMMAND
         bool "display.show_note: notes from Muse"

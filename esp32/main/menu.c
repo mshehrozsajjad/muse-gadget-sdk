@@ -36,6 +36,11 @@ static const char *TAG = "link.menu";
 
 typedef enum {
     ITEM_VOLUME,   // a press starts adjusting it with the dial, another stops
+    ITEM_MUTE,     // a press toggles it, as do the two below
+    ITEM_MIC,
+#if !CONFIG_MUSE_ENABLED
+    ITEM_WIFI,
+#endif
 #if CONFIG_HOMEHUB_DEEP_SLEEP_IDLE_MIN > 0
     ITEM_SLEEP,    // asks for a second press, then deep-sleeps
 #endif
@@ -67,6 +72,20 @@ static int menu_rows(led_menu_row_t rows[ITEM_COUNT]) {
                 else strlcpy(rows[i].value, "Off", sizeof(rows[i].value));
                 break;
             }
+            case ITEM_MUTE:
+                strlcpy(rows[i].label, "Mute", sizeof(rows[i].label));
+                strlcpy(rows[i].value, voice_muted() ? "On" : "Off", sizeof(rows[i].value));
+                break;
+            case ITEM_MIC:
+                strlcpy(rows[i].label, "Mic", sizeof(rows[i].label));
+                strlcpy(rows[i].value, voice_mic_on() ? "On" : "Off", sizeof(rows[i].value));
+                break;
+#if !CONFIG_MUSE_ENABLED
+            case ITEM_WIFI:
+                strlcpy(rows[i].label, "Wi-Fi", sizeof(rows[i].label));
+                strlcpy(rows[i].value, app_wifi_on() ? "On" : "Off", sizeof(rows[i].value));
+                break;
+#endif
 #if CONFIG_HOMEHUB_DEEP_SLEEP_IDLE_MIN > 0
             case ITEM_SLEEP:
                 strlcpy(rows[i].label, "Sleep now", sizeof(rows[i].label));
@@ -105,6 +124,31 @@ static void on_timeout(void *arg) {
     (void)arg;
     ESP_LOGI(TAG, "closed: untouched");
     menu_close();
+}
+
+// Flip a switch, and show what's now off on the status screen. Without
+// s_lock: turning Wi-Fi off or on may wait for a join to finish.
+static void toggle_item(int item) {
+    switch ((item_t)item) {
+        case ITEM_MUTE:
+            voice_set_muted(!voice_muted());
+            break;
+        case ITEM_MIC:
+            voice_set_mic(!voice_mic_on());
+            break;
+#if !CONFIG_MUSE_ENABLED
+        case ITEM_WIFI:
+            if (!app_set_wifi(!app_wifi_on())) ESP_LOGW(TAG, "wifi busy: not switched");
+            break;
+#endif
+        default:
+            return;
+    }
+#if CONFIG_MUSE_ENABLED
+    led_status_set_switches(true, voice_mic_on());
+#else
+    led_status_set_switches(app_wifi_on(), voice_mic_on());
+#endif
 }
 
 bool menu_init(void) {
@@ -177,9 +221,17 @@ void menu_press(void) {
     }
     int item = s_selected;
     bool confirmed = s_confirming == item;
+    bool toggle = false;
     switch ((item_t)item) {
         case ITEM_VOLUME:
             s_adjusting = !s_adjusting;
+            break;
+        case ITEM_MUTE:
+        case ITEM_MIC:
+#if !CONFIG_MUSE_ENABLED
+        case ITEM_WIFI:
+#endif
+            toggle = true;
             break;
         default:
             s_confirming = confirmed ? -1 : item;
@@ -187,6 +239,7 @@ void menu_press(void) {
             break;
     }
     xSemaphoreGive(s_lock);
+    if (toggle) toggle_item(item);
     if (confirmed) {
         esp_timer_stop(s_timeout);
         show();  // the menu goes before the screen changes

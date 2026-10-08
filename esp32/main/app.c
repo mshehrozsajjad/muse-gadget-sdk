@@ -2243,6 +2243,8 @@ static const int s_rescan_minutes[] = {1, 2, 4, 8, 15, 30};
 static int s_rescan_step;
 static int64_t s_rescan_at;          // 0 while online
 static atomic_bool s_rescan_now;     // a button press: look on the next tick
+static atomic_bool s_wifi_off;       // switched off in the menu: no rescans
+static TaskHandle_t s_heartbeat_task; // woken early when Wi-Fi comes back on
 
 static int64_t rescan_delay_us(int step) {
     return s_rescan_minutes[step] * 60LL * 1000000LL;
@@ -2250,7 +2252,7 @@ static int64_t rescan_delay_us(int step) {
 
 // On the heartbeat (the main task: join_saved_networks reads NVS).
 static void rescan_saved_networks(void) {
-    if (!config_setup_complete() || wifi_mgr_is_connected()) {
+    if (!config_setup_complete() || wifi_mgr_is_connected() || atomic_load(&s_wifi_off)) {
         s_rescan_step = 0;
         s_rescan_at = 0;
         return;
@@ -2289,6 +2291,30 @@ static void rescan_saved_networks(void) {
                  s_rescan_minutes[s_rescan_step]);
     }
     operation_gate_give();
+}
+
+bool app_set_wifi(bool on) {
+    if (on == !atomic_load(&s_wifi_off)) return true;
+    // Not in the middle of a join or setup: wait for it a little.
+    if (!operation_gate_take(pdMS_TO_TICKS(5000), on ? "wifi on" : "wifi off")) return false;
+    if (on) {
+        atomic_store(&s_wifi_off, false);
+        esp_err_t err = esp_wifi_start();
+        ESP_LOGI(TAG, "wifi on (%s): looking for a saved network", esp_err_to_name(err));
+        atomic_store(&s_rescan_now, true);  // the heartbeat joins, and the session follows
+        if (s_heartbeat_task) xTaskNotifyGive(s_heartbeat_task);
+    } else {
+        atomic_store(&s_wifi_off, true);
+        wifi_mgr_disconnect();  // no reconnecting by itself
+        esp_err_t err = esp_wifi_stop();
+        ESP_LOGI(TAG, "wifi off (%s)", esp_err_to_name(err));
+    }
+    operation_gate_give();
+    return true;
+}
+
+bool app_wifi_on(void) {
+    return !atomic_load(&s_wifi_off);
 }
 #endif
 
@@ -2967,6 +2993,9 @@ void app_run(void) {
     // Heartbeat: log full state every 5 s so we can tell where we're stuck.
     stack_monitor_t stack = STACK_MONITOR_INIT;
     tunnel_stats_t prev_tun = {0};
+#if !CONFIG_MUSE_ENABLED
+    s_heartbeat_task = xTaskGetCurrentTaskHandle();
+#endif
     while (1) {
         if (atomic_exchange_explicit(&s_setup_reset_pending, false,
                                      memory_order_acq_rel)) {
@@ -3048,12 +3077,15 @@ void app_run(void) {
         // Connected, there's little to do: tick slower, and let the radio
         // sleep deeper between voice turns. Offline, tick every 5 s for the
         // Wi-Fi rescan.
-        bool settled = wifi_mgr_is_connected() && noise_ctrl_is_connected();
-        wifi_mgr_power_check(settled);
+        // With Wi-Fi off there's nothing to look for: the slow tick too.
+        bool wifi_off = atomic_load(&s_wifi_off);
+        bool settled = (wifi_mgr_is_connected() && noise_ctrl_is_connected()) || wifi_off;
+        if (!wifi_off) wifi_mgr_power_check(settled);
 #if CONFIG_HOMEHUB_DEEP_SLEEP_IDLE_MIN > 0
         sleep_if_unused();
 #endif
-        vTaskDelay(pdMS_TO_TICKS(settled ? CONFIG_HOMEHUB_HEARTBEAT_IDLE_S * 1000 : 5000));
+        // A wait app_set_wifi() can cut short.
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(settled ? CONFIG_HOMEHUB_HEARTBEAT_IDLE_S * 1000 : 5000));
 #endif
     }
 }

@@ -70,6 +70,8 @@ typedef enum { EVT_PRESS, EVT_RELEASE, EVT_CHIME } voice_evt_t;
 static QueueHandle_t s_events;
 static atomic_bool s_ready;
 static atomic_int s_volume;
+static atomic_bool s_muted;    // the speaker silenced, the volume kept for after
+static atomic_bool s_mic_off;  // the paddle sends nothing (it keeps its setup role)
 static esp_timer_handle_t s_volume_save;  // stores the volume once turning stops
 
 static int load_volume(void) {
@@ -102,6 +104,7 @@ static void save_volume(void *arg) {
 
 void voice_turn_volume(int steps) {
     if (!atomic_load(&s_ready)) return;
+    atomic_store(&s_muted, false);  // turning the volume is wanting to hear it
     int volume = atomic_load(&s_volume) + steps * VOLUME_STEP;
     volume = volume < 0 ? 0 : volume > 100 ? 100 : volume;
     // At an end, show it again rather than nothing, so the turn is answered.
@@ -114,6 +117,28 @@ void voice_turn_volume(int steps) {
 
 int voice_volume(void) {
     return atomic_load(&s_volume);
+}
+
+void voice_set_muted(bool muted) {
+    atomic_store(&s_muted, muted);
+    ESP_LOGI(TAG, "speaker %s", muted ? "muted" : "unmuted");
+}
+
+bool voice_muted(void) {
+    return atomic_load(&s_muted);
+}
+
+bool voice_speaker_on(void) {
+    return atomic_load(&s_volume) > 0 && !atomic_load(&s_muted);
+}
+
+void voice_set_mic(bool on) {
+    atomic_store(&s_mic_off, !on);
+    ESP_LOGI(TAG, "mic %s", on ? "on" : "off");
+}
+
+bool voice_mic_on(void) {
+    return !atomic_load(&s_mic_off);
 }
 
 // Turns the volume with the dial. On an internal-RAM stack: storing the volume
@@ -179,7 +204,7 @@ static size_t record(void) {
 // A short tone on the speaker: high when recording starts, low when it stops.
 // Faded in and out so it doesn't click.
 static void play_cue(bool start) {
-    if (!atomic_load(&s_volume)) return;  // speaker off
+    if (!voice_speaker_on()) return;
     static int16_t tone[VOICE_PLAYER_RATE * CUE_MS / 1000];
     const int n = sizeof(tone) / sizeof(tone[0]);
     const int fade = VOICE_PLAYER_RATE * CUE_FADE_MS / 1000;
@@ -203,7 +228,7 @@ static void play_cue(bool start) {
 // Two rising notes (E6 then A6), each faded so they ring rather than click:
 // unlike the cues, which say "recording", this says "something for you".
 static void play_chime(void) {
-    if (!atomic_load(&s_volume)) return;  // speaker off
+    if (!voice_speaker_on()) return;
     static int16_t tone[VOICE_PLAYER_RATE * CHIME_NOTE_MS / 1000];
     static const float notes_hz[] = {1318.5f, 1760.0f};
     const int n = sizeof(tone) / sizeof(tone[0]);
@@ -348,6 +373,7 @@ static bool on_press(bool pressed) {
 #if CONFIG_HOMEHUB_MENU
     if (menu_take_paddle(pressed)) return true;  // it closed the menu instead
 #endif
+    if (pressed && atomic_load(&s_mic_off)) return false;  // the button's setup role
     if (pressed) {
         if (!atomic_load(&s_ready) || voice_board_muted()) return false;
         voice_hatch_refresh();

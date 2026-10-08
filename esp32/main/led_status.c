@@ -1202,6 +1202,11 @@ bool led_status_dismiss_card(void) {
     return false;
 }
 
+void led_status_set_switches(bool wifi_on, bool mic_on) {
+    (void)wifi_on;
+    (void)mic_on;
+}
+
 // No menu on a ring or a light.
 void led_status_show_menu(const led_menu_row_t *rows, int count, int selected, bool adjusting) {
     (void)rows;

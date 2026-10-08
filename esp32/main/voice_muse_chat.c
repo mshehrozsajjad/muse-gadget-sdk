@@ -88,10 +88,10 @@ size_t muse_settings_hatch_token_len(void) {
     return 0;
 }
 
-// Volume 0 turns the speaker off: replies are shown, not spoken, and not
-// sent to the TTS service.
+// Muted, or at volume 0, the speaker is off: replies are shown, not spoken,
+// and not sent to the TTS service.
 bool muse_settings_speaker_on(void) {
-    return voice_volume() > 0;
+    return voice_speaker_on();
 }
 
 // The reply card's page, on boards that have one; otherwise reply text is

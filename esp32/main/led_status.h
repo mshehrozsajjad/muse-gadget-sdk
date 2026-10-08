@@ -114,6 +114,11 @@ bool led_status_scroll_card(int pages);
 // showing. Backends without a card return false.
 bool led_status_dismiss_card(void);
 
+// What the menu has switched off: shown in place of the connection status
+// ("Wi-Fi off", or "Mic off" where it would say connected). Backends without
+// a screen ignore it.
+void led_status_set_switches(bool wifi_on, bool mic_on);
+
 // A menu row: its name on the left, its value (or "") on the right.
 #define LED_MENU_ROWS_MAX 8
 typedef struct {
