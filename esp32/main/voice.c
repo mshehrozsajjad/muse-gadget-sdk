@@ -199,28 +199,20 @@ static bool fail(const char *why) {
     return false;
 }
 
-// Wraps the reply to the card's normal or compact page; true if it goes on
-// past the page, that is if the page at its very end is another one.
-static bool reply_page(bool compact, char *page, size_t cap) {
-    static char last[512];
-    voice_reply_compact(compact);
-    page[0] = '\0';
-    if (!muse_hatch_turn_caption(0, page, cap)) return false;
-    return muse_hatch_turn_caption(SIZE_MAX, last, sizeof(last)) && strcmp(page, last) != 0;
+// Wrap `text` (Markdown cleaned off in place) to the card's width. False if
+// nothing's left to show.
+static bool wrap_for_card(char *text, char *lines, size_t cap) {
+    muse_hatch_plain_text(text);
+    return muse_hatch_wrap(text, lines, cap) > 0;
 }
 
-// Put the reply's opening page on the screen, on boards with a reply card:
-// in the normal size if it fits, otherwise in the compact one.
+// Put the reply so far on the screen, on boards with a reply card. The
+// message is cleaned once it's complete; until then, the copy is.
 static void show_reply(void) {
-    static char page[512];
-    bool more = reply_page(false, page, sizeof(page));
-    if (!page[0]) return;
-    bool compact = more;
-    if (compact) more = reply_page(true, page, sizeof(page));
-    voice_reply_compact(false);
-    // The message is cleaned once it's complete; until then, clean the page.
-    muse_hatch_plain_text(page);
-    led_status_show_reply(page, more, compact);
+    static char text[LED_STATUS_CARD_MAX];
+    static char lines[LED_STATUS_CARD_MAX];
+    if (!muse_hatch_turn_text(text, sizeof(text))) return;
+    if (wrap_for_card(text, lines, sizeof(lines))) led_status_show_reply(lines);
 }
 
 // Play the reply as it arrives. Returns true if a new press interrupted it.
@@ -424,39 +416,20 @@ static cJSON *note_error(const char *why) {
     return result;
 }
 
-// The note's opening page, wrapped as a reply is: in the normal size if it
-// fits, otherwise in the compact one (`compact`). True if it goes on past
-// that page.
-static bool note_page(const char *text, char *page, size_t cap, bool *compact) {
-    static char last[512];
-    bool more = false;
-    for (int c = 0; c < 2; c++) {
-        *compact = c;
-        voice_reply_compact(*compact);
-        page[0] = '\0';
-        if (!muse_hatch_caption_at(text, 0, page, cap)) break;
-        more = muse_hatch_caption_at(text, SIZE_MAX, last, sizeof(last)) && strcmp(page, last) != 0;
-        if (!more) break;
-    }
-    voice_reply_compact(false);
-    return more;
-}
-
 // Runs on the Noise session's task: the wrapping is quick, and the chime is
-// left to the voice task.
+// left to the voice task. Its buffers are its own, apart from show_reply's,
+// which runs on the voice task.
 cJSON *voice_note_command(cJSON *params) {
     static char text[NOTE_MAX_CHARS + 1];
-    static char page[512];
+    static char lines[LED_STATUS_CARD_MAX];
     cJSON *item = cJSON_GetObjectItem(params, "text");
     if (!cJSON_IsString(item) || !item->valuestring[0]) return note_error("text is required");
     if (strlen(item->valuestring) > NOTE_MAX_CHARS) return note_error("text is over 1000 characters");
     strlcpy(text, item->valuestring, sizeof(text));
-    muse_hatch_plain_text(text);
-    if (!text[0]) return note_error("text is empty once its Markdown is removed");
-
-    bool compact;
-    bool more = note_page(text, page, sizeof(page), &compact);
-    led_status_show_note(page, more, compact);
+    if (!wrap_for_card(text, lines, sizeof(lines))) {
+        return note_error("text is empty once its Markdown is removed");
+    }
+    led_status_show_note(lines);
     ESP_LOGI(TAG, "note: %s", text);
 
     if (atomic_load(&s_ready)) {

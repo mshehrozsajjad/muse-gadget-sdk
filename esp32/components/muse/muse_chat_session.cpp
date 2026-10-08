@@ -2246,6 +2246,17 @@ extern "C" bool muse_hatch_turn_caption(size_t played, char *out, size_t cap)
     return muse_hatch_caption_at(text, at, out, cap);
 }
 
+extern "C" bool muse_hatch_turn_text(char *out, size_t cap)
+{
+    for (int i = 0; i < s_turn.nmsgs && s_turn.texts; i++) {
+        if (s_turn.msgs[i].len) {
+            strlcpy(out, s_turn.texts + i * TEXT_MAX, cap);
+            return out[0] != '\0';
+        }
+    }
+    return false;
+}
+
 extern "C" size_t muse_hatch_turn_read(int16_t *pcm, size_t frames, int wait_ms)
 {
     return xStreamBufferReceive(s_out, pcm, frames * sizeof(int16_t), pdMS_TO_TICKS(wait_ms)) / sizeof(int16_t);

@@ -145,6 +145,24 @@ static bool next_line(const char **text, int cols, const char **start, size_t *l
     return end != p;
 }
 
+int muse_hatch_wrap(const char *text, char *out, size_t cap)
+{
+    int cols, lines;
+    muse_state_page(muse_text_has_cjk(text), &cols, &lines);
+    const char *p = text, *start;
+    size_t len, o = 0;
+    int n = 0;
+    out[0] = '\0';
+    while (next_line(&p, cols, &start, &len)) {
+        if (o + 1 + len >= cap) {
+            break;   /* whole lines only */
+        }
+        o += snprintf(out + o, cap - o, "%s%.*s", o ? "\n" : "", (int)len, start);
+        n++;
+    }
+    return n;
+}
+
 /*
  * Wraps `text` to the screen's page (muse_state_page) and puts the page holding
  * byte `at` in `out`. Pages overlap by a line: a page's last line starts the

@@ -104,9 +104,9 @@ muse_hatch_ev_t muse_hatch_turn_event(char *text, size_t cap);
  * ("# " at a line's start) go. Returns the new length. */
 size_t muse_hatch_plain_text(char *s);
 
-/* The page of `text`, wrapped to muse_state_page, that holds byte `at`: 0 for
- * the opening page, SIZE_MAX for the last. False if there's no text. */
-bool muse_hatch_caption_at(const char *text, size_t at, char *out, size_t cap);
+/* All of `text` wrapped to muse_state_page's width, the lines separated by
+ * '\n'; whole lines only, as many as fit in `cap`. Returns the line count. */
+int muse_hatch_wrap(const char *text, char *out, size_t cap);
 
 /*
  * The page of reply text holding what's being said after `played` frames of
@@ -114,6 +114,10 @@ bool muse_hatch_caption_at(const char *text, size_t at, char *out, size_t cap);
  * page. False until there's reply text to page.
  */
 bool muse_hatch_turn_caption(size_t played, char *out, size_t cap);
+
+/* The whole text of the turn's reply so far (its first message with any),
+ * for a card that scrolls through it. False until there's reply text. */
+bool muse_hatch_turn_text(char *out, size_t cap);
 
 /* Reply speech as 16 kHz mono. Waits up to wait_ms for some; returns frames read. */
 size_t muse_hatch_turn_read(int16_t *pcm, size_t frames, int wait_ms);

@@ -24,7 +24,3 @@
 // Re-read the pairing state and Noise host for the session. Call from a task
 // with its stack in internal RAM, before a turn and after pairing.
 void voice_hatch_refresh(void);
-
-// Wrap reply text to the reply card's compact page from now on, or its normal
-// one (muse_state_page).
-void voice_reply_compact(bool compact);

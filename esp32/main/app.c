@@ -2121,10 +2121,16 @@ void app_note_activity(void) {
 }
 
 #if CONFIG_HOMEHUB_DIAL
-// A press of the dial takes away a note or reply card. The menu comes later.
+// A press of the dial takes away a note or reply card, and turning it pages
+// through one. The menu comes later.
 static void on_dial_press(void) {
     app_note_activity();
     if (led_status_dismiss_card()) ESP_LOGI(TAG, "dial: card dismissed");
+}
+
+static void on_dial_turn(int steps) {
+    app_note_activity();
+    led_status_scroll_card(steps);
 }
 #endif
 
@@ -2804,7 +2810,7 @@ void app_run(void) {
     voice_init();
 #endif
 #if CONFIG_HOMEHUB_DIAL
-    if (!dial_init(on_dial_press)) ESP_LOGW(TAG, "dial push unavailable");
+    if (!dial_init(on_dial_press, on_dial_turn)) ESP_LOGW(TAG, "dial push unavailable");
 #endif
 #if CONFIG_HOMEHUB_SENSECAP_SENSORS
     sensecap_sensors_init();

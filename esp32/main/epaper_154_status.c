@@ -131,31 +131,20 @@ static const char *TAG = "link.led";
 #define STATUS_SCALE     2
 #define STATUS_LINE_GAP  4
 
-// Reply card: the status bar, then the reply's opening page, left-aligned:
-// in the status text's size (2x) when the reply fits, or compact (1.5x) to
-// fit nearly twice as much when it doesn't.
+// Reply card: the status bar, then a page of the reply, left-aligned in the
+// status text's size (2x), and a scrollbar down the right edge when it runs
+// to more pages. Pages overlap by a line, so the dial turns them without
+// losing the thread.
 #define REPLY_X          4
 #define REPLY_Y          20
-#define REPLY_MAX        512
-
-typedef struct {
-    int halves;  // font pixel size in half pixels
-    int cols, lines;
-    int line_h;  // in pixels
-} reply_layout_t;
-
-static const reply_layout_t s_layout_normal = {
-    .halves = STATUS_SCALE * 2,
-    .cols = 16,  // 12 px a character
-    .lines = 9,
-    .line_h = PIXEL_FONT_HEIGHT * STATUS_SCALE + STATUS_LINE_GAP,  // 20 px
-};
-static const reply_layout_t s_layout_compact = {
-    .halves = 3,
-    .cols = 21,  // 9 px a character
-    .lines = 12,
-    .line_h = PIXEL_FONT_HEIGHT * 3 / 2 + 3,  // 15 px
-};
+#define REPLY_MAX        LED_STATUS_CARD_MAX
+#define REPLY_COLS       16  // 12 px a character
+#define REPLY_LINES      9
+#define REPLY_LINE_H     (PIXEL_FONT_HEIGHT * STATUS_SCALE + STATUS_LINE_GAP)  // 20 px
+#define REPLY_PAGE_STEP  (REPLY_LINES - 1)
+#define SCROLLBAR_W      3
+#define SCROLLBAR_X      (EPD_W - SCROLLBAR_W)
+#define SCROLLBAR_MIN_H  12
 // The card gives way to the status screen this long after the turn ends.
 #define REPLY_SHOW_MS    60000
 
@@ -267,7 +256,7 @@ typedef struct {
 static climate_t s_drawn_climate;
 static muse_mode_t s_drawn_mode;
 static char s_drawn_reply[REPLY_MAX];
-static bool s_drawn_reply_more, s_drawn_reply_compact;
+static int s_drawn_reply_page;
 
 // Requested by led_status_set_state(), _set_title() and _set_voice();
 // guarded by s_mutex. While a voice turn runs, its state stands in for the
@@ -278,10 +267,10 @@ static led_voice_t s_voice = LED_VOICE_IDLE;
 static bool s_voice_changed;  // settle quickly: the change is a voice one
 static uint32_t s_pose_generation; // captures rapid leave/re-enter during a panel refresh
 static int s_reset_left;         // the button's reset countdown, 0 for none
-static char s_reply[REPLY_MAX];  // the reply card's page, "" for none
-static bool s_reply_more;        // the reply goes on past the page
-static bool s_reply_compact;     // laid out with s_layout_compact
+static char s_reply[REPLY_MAX];  // the reply card's wrapped lines, "" for none
+static int s_reply_page;         // the card's page shown, from 0
 static bool s_reply_sticky;      // a note: stays until dismissed, no timeout
+static bool s_reply_touched;     // scrolled: the card's time starts again
 static char s_title[48];
 static TaskHandle_t s_task;
 
@@ -528,6 +517,13 @@ static void draw_status(const char *text, int y, int scale) {
 
 #define SLEEP_LABEL "Press to wake"
 
+// How many pages the card's wrapped lines take, overlapping by a line.
+static int card_pages(const char *text) {
+    int lines = *text ? 1 : 0;
+    for (const char *p = text; *p; p++) lines += *p == '\n';
+    return lines <= REPLY_LINES ? 1 : 1 + (lines - REPLY_LINES + REPLY_PAGE_STEP - 1) / REPLY_PAGE_STEP;
+}
+
 // The status text for the reset countdown, `left` seconds from 1 to 5.
 static const char *countdown_label(int left) {
     static const char *const labels[] = {
@@ -584,25 +580,37 @@ static int reply_line_ascii(const char *line, size_t bytes, char *out, int cap) 
     return n;
 }
 
-// The reply's page, line by line, with "..." closing the last line when the
-// reply goes on.
-static void draw_reply(const char *page, bool more, const reply_layout_t *layout) {
-    const int cols = layout->cols;
-    char line[64];
-    for (int row = 0; row < layout->lines && *page; row++) {
-        const char *end = strchr(page, '\n');
-        size_t bytes = end ? (size_t)(end - page) : strlen(page);
-        int n = reply_line_ascii(page, bytes, line, sizeof(line));
-        page = end ? end + 1 : page + bytes;
-        bool last = row == layout->lines - 1 || !*page;
-        if (last && more) {
-            while (n > cols - 3 || (n && line[n - 1] == ' ')) n--;
-            memcpy(line + n, "...", 4);
-            n += 3;
-        }
-        draw_run_halves(line, n < cols ? n : cols, REPLY_X, REPLY_Y + row * layout->line_h,
-                        layout->halves);
+// The scrollbar: a thin track down the right edge, and a thumb for where
+// `page` sits among `pages`.
+static void draw_scrollbar(int page, int pages) {
+    const int track_h = EPD_H - REPLY_Y;
+    for (int y = REPLY_Y; y < EPD_H; y++) s_canvas[(size_t)y * EPD_W + SCROLLBAR_X + 1] = 0;
+    int thumb_h = track_h / pages;
+    if (thumb_h < SCROLLBAR_MIN_H) thumb_h = SCROLLBAR_MIN_H;
+    int thumb_y = REPLY_Y + (track_h - thumb_h) * page / (pages - 1);
+    for (int y = thumb_y; y < thumb_y + thumb_h; y++) {
+        memset(s_canvas + (size_t)y * EPD_W + SCROLLBAR_X, 0, SCROLLBAR_W);
     }
+}
+
+// Page `page` of the card, line by line, and the scrollbar if it has more.
+static void draw_reply(const char *text, int page) {
+    int pages = card_pages(text);
+    if (page >= pages) page = pages - 1;
+    for (int skip = page * REPLY_PAGE_STEP; skip > 0 && *text; skip--) {
+        const char *end = strchr(text, '\n');
+        text = end ? end + 1 : text + strlen(text);
+    }
+    char line[64];
+    for (int row = 0; row < REPLY_LINES && *text; row++) {
+        const char *end = strchr(text, '\n');
+        size_t bytes = end ? (size_t)(end - text) : strlen(text);
+        int n = reply_line_ascii(text, bytes, line, sizeof(line));
+        text = end ? end + 1 : text + bytes;
+        draw_run_halves(line, n < REPLY_COLS ? n : REPLY_COLS, REPLY_X,
+                        REPLY_Y + row * REPLY_LINE_H, STATUS_SCALE * 2);
+    }
+    if (pages > 1) draw_scrollbar(page, pages);
 }
 #endif
 
@@ -792,7 +800,12 @@ static void epd_task(void *arg) {
         char title[sizeof(s_title)];
         static char reply[REPLY_MAX];
         xSemaphoreTake(s_mutex, portMAX_DELAY);
-        // The card's time starts once the turn is over; a note has none.
+        // The card's time starts once the turn is over, and again when it's
+        // scrolled; a note has none.
+        if (s_reply_touched) {
+            s_reply_touched = false;
+            card_until = 0;
+        }
         if (!s_reply[0] || s_voice != LED_VOICE_IDLE || s_reply_sticky) {
             card_until = 0;
         } else if (!card_until) {
@@ -802,8 +815,7 @@ static void epd_task(void *arg) {
             card_until = 0;
         }
         memcpy(reply, s_reply, sizeof(reply));
-        bool reply_more = s_reply_more;
-        bool reply_compact = s_reply_compact;
+        int reply_page = s_reply_page;
         const char *label = voice_label(s_voice);
         muse_mode_t mode = label ? voice_mode(s_voice) : character_mode(s_state);
         uint32_t generation = s_pose_generation;
@@ -845,8 +857,7 @@ static void epd_task(void *arg) {
                                         || battery != s_drawn_battery || usb != s_drawn_usb
                                         || memcmp(&climate, &s_drawn_climate, sizeof(climate)) != 0
                                         || strcmp(reply, s_drawn_reply) != 0
-                                        || reply_more != s_drawn_reply_more
-                                        || reply_compact != s_drawn_reply_compact);
+                                        || reply_page != s_drawn_reply_page);
         // The first screen, and the first after an image or a failed refresh,
         // is full. Otherwise the ghosting is cleaned when the screen is calm.
         bool animating = animation.last && animation.frame < animation.last;
@@ -858,7 +869,7 @@ static void epd_task(void *arg) {
             draw_status_bar(wifi, battery, climate, usb);
 #if CONFIG_HOMEHUB_VOICE
             if (reply[0]) {
-                draw_reply(reply, reply_more, reply_compact ? &s_layout_compact : &s_layout_normal);
+                draw_reply(reply, reply_page);
             } else
 #endif
             {
@@ -879,8 +890,7 @@ static void epd_task(void *arg) {
             s_drawn_climate = climate;
             s_drawn_mode = mode;
             memcpy(s_drawn_reply, reply, sizeof(s_drawn_reply));
-            s_drawn_reply_more = reply_more;
-            s_drawn_reply_compact = reply_compact;
+            s_drawn_reply_page = reply_page;
         }
         xSemaphoreGive(s_lock);
         // Recheck after rendering: never start a refresh for a superseded
@@ -1118,6 +1128,25 @@ void led_status_show_animation(void) {
     if (was_image) xTaskNotifyGive(s_task);
 }
 
+bool led_status_scroll_card(int pages) {
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool shown = s_reply[0] != '\0';
+    int page = s_reply_page + pages;
+    int last = shown ? card_pages(s_reply) - 1 : 0;
+    page = page < 0 ? 0 : page > last ? last : page;
+    bool changed = shown && page != s_reply_page;
+    if (changed) {
+        s_reply_page = page;
+        s_reply_touched = true;
+        s_voice_changed = true;  // turn it at once, as a voice change would
+        s_pose_generation++;
+    }
+    xSemaphoreGive(s_mutex);
+    if (changed) xTaskNotifyGive(s_task);
+    return shown;
+}
+
 bool led_status_dismiss_card(void) {
     if (!s_ready) return false;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
@@ -1153,20 +1182,20 @@ void led_status_set_voice(led_voice_t voice) {
     if (changed) xTaskNotifyGive(s_task);
 }
 
-bool led_status_reply_page(bool compact, int *cols, int *lines) {
-    const reply_layout_t *layout = compact ? &s_layout_compact : &s_layout_normal;
-    *cols = layout->cols;
-    *lines = layout->lines;
+bool led_status_reply_page(int *cols, int *lines) {
+    *cols = REPLY_COLS;
+    *lines = REPLY_LINES;
     return true;
 }
 
-static void show_card(const char *page, bool more, bool compact, bool sticky) {
-    if (!s_ready || !page) return;
+// `from_top`: a new card, from its first page; otherwise the page shown stays.
+static void show_card(const char *lines, bool sticky, bool from_top) {
+    if (!s_ready || !lines) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    bool changed = strcmp(s_reply, page) != 0 || s_reply_more != more || s_reply_compact != compact;
-    snprintf(s_reply, sizeof(s_reply), "%s", page);
-    s_reply_more = more;
-    s_reply_compact = compact;
+    bool fresh = from_top || !s_reply[0];
+    bool changed = strcmp(s_reply, lines) != 0 || (fresh && s_reply_page);
+    strlcpy(s_reply, lines, sizeof(s_reply));
+    if (fresh) s_reply_page = 0;
     s_reply_sticky = sticky;
     if (changed) {
         s_voice_changed = true;
@@ -1176,12 +1205,12 @@ static void show_card(const char *page, bool more, bool compact, bool sticky) {
     if (changed) xTaskNotifyGive(s_task);
 }
 
-void led_status_show_reply(const char *page, bool more, bool compact) {
-    show_card(page, more, compact, false);
+void led_status_show_reply(const char *lines) {
+    show_card(lines, false, false);
 }
 
-void led_status_show_note(const char *page, bool more, bool compact) {
-    show_card(page, more, compact, true);
+void led_status_show_note(const char *lines) {
+    show_card(lines, true, true);
 }
 
 // No live level meter: e-paper can't keep up with it.

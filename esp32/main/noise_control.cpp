@@ -1371,8 +1371,9 @@ static char *build_register_json(void) {
 #if CONFIG_HOMEHUB_NOTE_COMMAND
     cJSON *note_required = cJSON_CreateObject();
     cJSON_AddItemToObject(note_required, "text",
-                          string_param("The note, plain text; about 250 characters fit "
-                                       "on the screen, the rest is cut off."));
+                          string_param("The note, plain text, up to 1000 characters. "
+                                       "About 140 fit on the screen; the user scrolls "
+                                       "through the rest with the dial."));
     add_command(commands, "display.show_note",
                 "Show a short note on the device's screen, with a chime, without being "
                 "asked: say a task has finished or something needs the user. It stays "

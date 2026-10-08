@@ -53,6 +53,7 @@ void muse_hatch_tail_words(const char *text, char *out, size_t cap) { strlcpy(ou
 bool muse_hatch_caption_at(const char *text, size_t, char *out, size_t cap) {
     strlcpy(out, text, cap); return text[0];
 }
+size_t muse_hatch_plain_text(char *text) { return strlen(text); }
 static void turn_finish() { s_turn.phase = P_IDLE; }
 static void turn_fail(const char *) { turn_finish(); }
 static bool ensure_connected() { return true; }

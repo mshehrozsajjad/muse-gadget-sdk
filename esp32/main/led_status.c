@@ -1178,25 +1178,25 @@ void led_status_show_volume(int percent) {
 }
 
 // No reply card on a ring or a light: replies show up in the Muse app.
-bool led_status_reply_page(bool compact, int *cols, int *lines) {
-    (void)compact;
+bool led_status_reply_page(int *cols, int *lines) {
     (void)cols;
     (void)lines;
     return false;
 }
 
-void led_status_show_reply(const char *page, bool more, bool compact) {
-    (void)page;
-    (void)more;
-    (void)compact;
+void led_status_show_reply(const char *lines) {
+    (void)lines;
 }
 
-void led_status_show_note(const char *page, bool more, bool compact) {
-    (void)page;
-    (void)more;
-    (void)compact;
+void led_status_show_note(const char *lines) {
+    (void)lines;
 }
 #endif
+
+bool led_status_scroll_card(int pages) {
+    (void)pages;
+    return false;
+}
 
 bool led_status_dismiss_card(void) {
     return false;

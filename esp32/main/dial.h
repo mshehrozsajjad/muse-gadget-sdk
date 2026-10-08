@@ -14,15 +14,18 @@
  * limitations under the License.
  */
 
-// A rotary dial's push switch (CONFIG_HOMEHUB_DIAL): pressed, it pulls its
-// GPIO to ground. The rotation isn't read yet.
+// A rotary dial with a push switch (CONFIG_HOMEHUB_DIAL), an EC11 or alike:
+// A, B and the push each pull their GPIO to ground.
 
 #pragma once
 
 #include <stdbool.h>
 
-typedef void (*dial_cb)(void);
+typedef void (*dial_press_cb)(void);
+// `steps`: clicks turned since the last call, positive forward.
+typedef void (*dial_turn_cb)(int steps);
 
-// Starts watching the push: `on_press` runs on the dial's task once a press
-// is released. The press also wakes the chip from light sleep.
-bool dial_init(dial_cb on_press);
+// Starts watching the dial. The callbacks run on the dial's task: a press
+// once it's released, turns as they come. Either also wakes the chip from
+// light sleep.
+bool dial_init(dial_press_cb on_press, dial_turn_cb on_turn);

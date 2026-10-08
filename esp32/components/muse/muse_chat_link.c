@@ -906,6 +906,15 @@ bool muse_hatch_turn_caption(size_t played, char *out, size_t cap)
     return muse_hatch_caption_at(s_turn.text, at < len ? at : len - 1, out, cap);
 }
 
+bool muse_hatch_turn_text(char *out, size_t cap)
+{
+    if (s_turn.phase != T_REPLY || !s_turn.replied || !s_turn.text[0]) {
+        return false;
+    }
+    strlcpy(out, s_turn.text, cap);
+    return true;
+}
+
 size_t muse_hatch_turn_read(int16_t *pcm, size_t frames, int wait_ms)
 {
     (void)pcm;

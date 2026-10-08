@@ -91,18 +91,25 @@ void led_status_set_level(float level);
 // it shows.
 void led_status_show_volume(int percent);
 
+// The longest card text, in bytes, wrapped lines included.
+#define LED_STATUS_CARD_MAX 1536
+
 // The reply card's page in characters, for backends that show a reply's text
-// (muse_hatch_turn_caption wraps to it): the normal one, or the compact one
-// for replies too long for it. False without a card.
-bool led_status_reply_page(bool compact, int *cols, int *lines);
-// Show a reply's opening page in place of the status screen until the next
-// voice turn: lines separated by '\n', `more` when the reply goes on past it,
-// and `compact` when it was wrapped to the compact page. Backends without a
-// card ignore it.
-void led_status_show_reply(const char *page, bool more, bool compact);
-// As led_status_show_reply, for a note Muse sent on its own: it stays, with
-// no timeout, until led_status_dismiss_card() or the next voice turn.
-void led_status_show_note(const char *page, bool more, bool compact);
+// (muse_hatch_wrap wraps to its width). False without a card.
+bool led_status_reply_page(int *cols, int *lines);
+// Show a reply in place of the status screen until the next voice turn, or a
+// while after this one: all of it, wrapped to the page's width, lines
+// separated by '\n'. Longer than a page, it scrolls (led_status_scroll_card).
+// Called again as the reply grows, it keeps the page shown. Backends without
+// a card ignore it.
+void led_status_show_reply(const char *lines);
+// As led_status_show_reply, for a note Muse sent on its own: from its first
+// page, and with no timeout, until led_status_dismiss_card() or the next
+// voice turn.
+void led_status_show_note(const char *lines);
+// Turn the card's page: forward for positive `pages`, back for negative,
+// stopping at either end. False if no card is showing.
+bool led_status_scroll_card(int pages);
 // Take away a reply card or note, back to the status screen. True if one was
 // showing. Backends without a card return false.
 bool led_status_dismiss_card(void);

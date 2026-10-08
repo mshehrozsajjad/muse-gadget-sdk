@@ -573,7 +573,12 @@ void led_status_show_reset_countdown(int seconds_left) {
     (void)seconds_left;
 }
 
-// No reply card here, so nothing to dismiss.
+// No reply card here, so nothing to scroll or dismiss.
+bool led_status_scroll_card(int pages) {
+    (void)pages;
+    return false;
+}
+
 bool led_status_dismiss_card(void) {
     return false;
 }
