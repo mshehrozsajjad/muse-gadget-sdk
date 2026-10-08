@@ -201,11 +201,97 @@ bool muse_hatch_caption_at(const char *text, size_t at, char *out, size_t cap)
     return true;
 }
 
+/* Inline code longer than this, or with any of CODE_CHARS, is code to drop;
+ * shorter and plain, it's a word ("run `npm` first") and stays. */
+#define INLINE_WORD_MAX 20
+#define CODE_CHARS "(){}[]<>=;:/\\_.\"'$#@|&"
+
+static bool code_like(const char *s, size_t n)
+{
+    if (!n || n > INLINE_WORD_MAX) {
+        return true;
+    }
+    for (size_t i = 0; i < n; i++) {
+        if (strchr(CODE_CHARS, s[i])) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Where code was dropped from inside a line, the space before it goes when
+ * a space or punctuation follows, so no gap is left. */
+static char *close_gap(char *out, const char *start, const char *next)
+{
+    if (out > start && out[-1] == ' ' && *next && strchr(" .,;:!?)", *next)) {
+        out--;
+    }
+    return out;
+}
+
+/* The end of a [[...]] span starting at `p`: just past the "]]" that closes
+ * it, counting nested brackets and skipping quoted strings, so a widget's
+ * JSON options go with it. NULL if it doesn't close (still arriving). */
+static char *skip_double_brackets(char *p)
+{
+    int depth = 0;
+    bool quoted = false;
+    for (char *q = p; *q; q++) {
+        if (quoted) {
+            if (*q == '\\' && q[1]) {
+                q++;
+            } else if (*q == '"') {
+                quoted = false;
+            }
+        } else if (*q == '"') {
+            quoted = true;
+        } else if (*q == '[') {
+            depth++;
+        } else if (*q == ']' && --depth == 0) {
+            return q + 1;
+        }
+    }
+    return NULL;
+}
+
 size_t muse_hatch_plain_text(char *s)
 {
     char *out = s;
     bool line_start = true;
     for (char *p = s; *p;) {
+        if (!strncmp(p, "```", 3)) {
+            /* Code isn't read: a block goes with its fence lines; one cut
+             * off (still arriving) goes to the end. */
+            char *close = strstr(p + 3, "```");
+            if (!close) {
+                break;
+            }
+            p = close + 3;
+            if (line_start) {
+                while (*p && *p != '\n') {
+                    p++;
+                }
+                p += *p == '\n';
+            } else {
+                out = close_gap(out, s, p);
+            }
+            continue;
+        }
+        if (p[0] == '[' && p[1] == '[') {
+            /* Muse's widgets ([[hatch_widget:...]], options the app shows as
+             * buttons) have nothing to read: they go, to the end if cut off. */
+            char *end = skip_double_brackets(p);
+            if (!end) {
+                break;
+            }
+            p = end;
+            if (line_start && *p == '\n') {
+                p++;   /* a line of its own: no empty line left */
+            } else {
+                out = close_gap(out, s, p);
+            }
+            continue;
+        }
         if (line_start && *p == '#') {
             const char *q = p;
             while (*q == '#') {
@@ -232,12 +318,32 @@ size_t muse_hatch_plain_text(char *s)
                 continue;
             }
         }
-        if (*p == '*' || *p == '`') {
+        if (*p == '`') {
+            char *close = strpbrk(p + 1, "`\n");
+            if (close && *close == '`') {
+                size_t n = (size_t)(close - p - 1);
+                if (code_like(p + 1, n)) {
+                    out = close_gap(out, s, close + 1);
+                } else {
+                    memmove(out, p + 1, n);
+                    out += n;
+                }
+                p = close + 1;
+                line_start = false;
+                continue;
+            }
+            p++;   /* a lone mark */
+            continue;
+        }
+        if (*p == '*') {
             p++;
             continue;
         }
         line_start = *p == '\n';
         *out++ = *p++;
+    }
+    while (out > s && (out[-1] == ' ' || out[-1] == '\n')) {
+        out--;   /* nothing to show or say after the last word */
     }
     *out = '\0';
     return (size_t)(out - s);

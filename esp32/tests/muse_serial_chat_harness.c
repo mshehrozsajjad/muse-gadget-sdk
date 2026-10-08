@@ -19,7 +19,9 @@
  *   console    stdin is a reply's text: prints the lines a typed turn sends for it
  *   unescape   stdin is console lines: prints each unescaped, as "<length>:<bytes>"
  *   caption C  stdin is a reply's text: prints it wrapped to C columns, as the
- *              screen pages it (test_muse_caption_wrap.py) */
+ *              screen pages it (test_muse_caption_wrap.py)
+ *   plain      stdin is a reply's text: prints it as shown and spoken, its
+ *              Markdown and code taken out (test_muse_plain_text.py) */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -93,8 +95,10 @@ int main(int argc, char **argv)
         if (muse_hatch_caption_at(in, 0, page, sizeof(page))) {
             fputs(page, stdout);
         }
+    } else if (argc > 1 && !strcmp(argv[1], "plain")) {
+        fwrite(in, 1, muse_hatch_plain_text(in), stdout);
     } else {
-        fprintf(stderr, "usage: %s console|unescape|caption COLS < input\n", argv[0]);
+        fprintf(stderr, "usage: %s console|unescape|caption COLS|plain < input\n", argv[0]);
         return 2;
     }
     free(in);
