@@ -343,7 +343,8 @@ static void voice_task(void *arg) {
     }
     voice_board_set_volume(atomic_load(&s_volume));
     atomic_store(&s_ready, true);
-    if (xTaskCreate(dial_task, "dial", 3072, NULL, 3, NULL) != pdPASS) {
+    // It polls every 20 ms, which would keep the chip out of light sleep.
+    if (voice_board_has_dial() && xTaskCreate(dial_task, "dial", 3072, NULL, 3, NULL) != pdPASS) {
         ESP_LOGW(TAG, "no memory for the dial");
     }
     ESP_LOGI(TAG, "ready");

@@ -53,3 +53,5 @@ bool voice_board_muted(void);
 
 // Dial detents since the last call: positive clockwise, zero without a dial.
 int voice_board_dial_steps(void);
+// Whether there's a dial to read: without one, nothing polls it.
+bool voice_board_has_dial(void);

@@ -131,8 +131,9 @@ void voice_board_set_volume(int percent) {
 // No mute switch on this board.
 bool voice_board_muted(void) { return false; }
 
-// No dial yet: the thumb dial is a later addition.
+// The thumb dial isn't the codec's: dial.c reads it (CONFIG_HOMEHUB_DIAL).
 int voice_board_dial_steps(void) { return 0; }
+bool voice_board_has_dial(void) { return false; }
 
 void voice_board_amp(bool on) {
     if (!s_speaker) return;

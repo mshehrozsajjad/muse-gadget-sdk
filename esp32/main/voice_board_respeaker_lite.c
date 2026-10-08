@@ -81,6 +81,7 @@ bool voice_board_muted(void) {
 }
 
 int voice_board_dial_steps(void) { return 0; }
+bool voice_board_has_dial(void) { return false; }
 void voice_board_amp(bool on) {
     // XMOS owns amplifier enable and headphone detection; leave its routing intact.
     (void)on;

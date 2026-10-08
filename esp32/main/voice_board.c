@@ -235,6 +235,10 @@ static esp_err_t dial_init(void) {
     return err;
 }
 
+bool voice_board_has_dial(void) {
+    return s_dial != NULL;
+}
+
 int voice_board_dial_steps(void) {
     int count;
     if (!s_dial || pcnt_unit_get_count(s_dial, &count) != ESP_OK) return 0;
